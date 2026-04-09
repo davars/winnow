@@ -55,6 +55,17 @@ func CreateEnricherTable(db *sql.DB, tableName string) error {
 	return nil
 }
 
+// validateIdentifier checks that s is a safe SQL identifier.
+func validateIdentifier(s, kind string) error {
+	if !validTableName.MatchString(s) {
+		return fmt.Errorf("invalid %s %q: must match %s", kind, s, validTableName.String())
+	}
+	return nil
+}
+
+// validColumnType matches safe SQLite type keywords.
+var validColumnType = regexp.MustCompile(`^[a-zA-Z]+$`)
+
 // EnsureSchema compares the declared schema from a SchemaProvider against
 // the current database state and applies any necessary changes:
 // - Adds missing columns via ALTER TABLE ADD COLUMN
@@ -63,8 +74,33 @@ func CreateEnricherTable(db *sql.DB, tableName string) error {
 // - Attempts to drop stale columns (logs warning on failure)
 func EnsureSchema(db *sql.DB, provider SchemaProvider) error {
 	table := provider.TableName()
-	if !validTableName.MatchString(table) {
-		return fmt.Errorf("invalid table name %q from provider %s", table, provider.Name())
+	if err := validateIdentifier(table, "table name"); err != nil {
+		return fmt.Errorf("provider %s: %w", provider.Name(), err)
+	}
+
+	// Validate all declared columns and indexes upfront.
+	for _, col := range provider.Columns() {
+		if err := validateIdentifier(col.Name, "column name"); err != nil {
+			return fmt.Errorf("provider %s: %w", provider.Name(), err)
+		}
+		if !validColumnType.MatchString(col.Type) {
+			return fmt.Errorf("provider %s: invalid column type %q for %s", provider.Name(), col.Type, col.Name)
+		}
+	}
+	for _, idx := range provider.Indexes() {
+		if err := validateIdentifier(idx.Name, "index name"); err != nil {
+			return fmt.Errorf("provider %s: %w", provider.Name(), err)
+		}
+		if idx.Table != "" {
+			if err := validateIdentifier(idx.Table, "index table"); err != nil {
+				return fmt.Errorf("provider %s: %w", provider.Name(), err)
+			}
+		}
+		for _, c := range idx.Columns {
+			if err := validateIdentifier(c, "index column"); err != nil {
+				return fmt.Errorf("provider %s: %w", provider.Name(), err)
+			}
+		}
 	}
 
 	// Add missing columns.
@@ -172,22 +208,23 @@ func getIndexes(db *sql.DB, provider SchemaProvider) (map[string]bool, error) {
 
 	indexes := make(map[string]bool)
 	for table := range tables {
-		rows, err := db.Query("PRAGMA index_list(" + table + ")")
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var seq int
-			var name, origin string
-			var unique, partial int
-			if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
-				rows.Close()
-				return nil, err
+		if err := func() error {
+			rows, err := db.Query("PRAGMA index_list(" + table + ")")
+			if err != nil {
+				return err
 			}
-			indexes[name] = true
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var seq int
+				var name, origin string
+				var unique, partial int
+				if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+					return err
+				}
+				indexes[name] = true
+			}
+			return rows.Err()
+		}(); err != nil {
 			return nil, err
 		}
 	}

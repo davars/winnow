@@ -50,6 +50,17 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// xdgConfigPath returns the XDG-based config path, or "" if it cannot be determined.
+func xdgConfigPath() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "winnow", "winnow.toml")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".config", "winnow", "winnow.toml")
+	}
+	return ""
+}
+
 // Find locates the config file using the search order:
 //  1. explicit path (from -c flag)
 //  2. $WINNOW_CONFIG
@@ -58,7 +69,7 @@ func Load(path string) (*Config, error) {
 //
 // Returns the path to the first file that exists, or an error if none found.
 func Find(explicit string) (string, error) {
-	candidates := []string{}
+	var candidates []string
 
 	if explicit != "" {
 		candidates = append(candidates, explicit)
@@ -68,10 +79,8 @@ func Find(explicit string) (string, error) {
 		candidates = append(candidates, env)
 	}
 
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		candidates = append(candidates, filepath.Join(xdg, "winnow", "winnow.toml"))
-	} else if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".config", "winnow", "winnow.toml"))
+	if xdg := xdgConfigPath(); xdg != "" {
+		candidates = append(candidates, xdg)
 	}
 
 	candidates = append(candidates, "winnow.toml")
@@ -87,12 +96,8 @@ func Find(explicit string) (string, error) {
 
 // DefaultConfigPath returns the default path for writing a new config file.
 func DefaultConfigPath() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "winnow", "winnow.toml")
+	if p := xdgConfigPath(); p != "" {
+		return p
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "winnow.toml"
-	}
-	return filepath.Join(home, ".config", "winnow", "winnow.toml")
+	return "winnow.toml"
 }

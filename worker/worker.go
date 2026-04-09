@@ -107,8 +107,7 @@ func Run(ctx context.Context, db *sql.DB, source WorkSource, process ProcessFunc
 			break
 		}
 
-		chunks := slices.Collect(slices.Chunk(items, procBatch))
-		numChunks := len(chunks)
+		numChunks := (len(items) + procBatch - 1) / procBatch
 
 		// Buffer results to numChunks so workers never block on send,
 		// preventing deadlock with the coordinator's sends to work.
@@ -140,7 +139,7 @@ func Run(ctx context.Context, db *sql.DB, source WorkSource, process ProcessFunc
 
 		// Send all chunks from the coordinator. This is safe because
 		// workers drain work and never block on results (buffered to numChunks).
-		for _, chunk := range chunks {
+		for chunk := range slices.Chunk(items, procBatch) {
 			work <- chunk
 		}
 		close(work)

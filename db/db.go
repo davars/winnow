@@ -97,34 +97,19 @@ type Stats struct {
 }
 
 // GetStats queries the database for summary statistics.
-// It handles missing columns gracefully (columns added by later phases).
 func GetStats(db *sql.DB) (*Stats, error) {
 	var s Stats
-
-	err := db.QueryRow("SELECT COUNT(*) FROM files WHERE missing = 0").Scan(&s.Files)
+	err := db.QueryRow(`
+		SELECT
+			COALESCE(SUM(CASE WHEN missing = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN missing = 1 THEN 1 ELSE 0 END), 0),
+			(SELECT COUNT(*) FROM directories),
+			(SELECT COUNT(*) FROM operations),
+			(SELECT COUNT(*) FROM process_errors)
+		FROM files
+	`).Scan(&s.Files, &s.Missing, &s.Directories, &s.Operations, &s.Errors)
 	if err != nil {
-		return nil, fmt.Errorf("counting files: %w", err)
+		return nil, fmt.Errorf("querying stats: %w", err)
 	}
-
-	err = db.QueryRow("SELECT COUNT(*) FROM files WHERE missing = 1").Scan(&s.Missing)
-	if err != nil {
-		return nil, fmt.Errorf("counting missing: %w", err)
-	}
-
-	err = db.QueryRow("SELECT COUNT(*) FROM directories").Scan(&s.Directories)
-	if err != nil {
-		return nil, fmt.Errorf("counting directories: %w", err)
-	}
-
-	err = db.QueryRow("SELECT COUNT(*) FROM operations").Scan(&s.Operations)
-	if err != nil {
-		return nil, fmt.Errorf("counting operations: %w", err)
-	}
-
-	err = db.QueryRow("SELECT COUNT(*) FROM process_errors").Scan(&s.Errors)
-	if err != nil {
-		return nil, fmt.Errorf("counting errors: %w", err)
-	}
-
 	return &s, nil
 }

@@ -330,6 +330,69 @@ func TestEnsureSchemaInvalidTableName(t *testing.T) {
 	}
 }
 
+func TestEnsureSchemaRejectsInvalidIdentifiers(t *testing.T) {
+	db := openTestDB(t)
+
+	tests := []struct {
+		name    string
+		provider *testProvider
+		wantErr string
+	}{
+		{
+			name: "bad column name",
+			provider: &testProvider{
+				name: "test", table: "files",
+				columns: []Column{{Name: "col; DROP TABLE files", Type: "TEXT"}},
+			},
+			wantErr: "invalid column name",
+		},
+		{
+			name: "bad column type",
+			provider: &testProvider{
+				name: "test", table: "files",
+				columns: []Column{{Name: "col", Type: "TEXT; DROP"}},
+			},
+			wantErr: "invalid column type",
+		},
+		{
+			name: "bad index name",
+			provider: &testProvider{
+				name: "test", table: "files",
+				indexes: []Index{{Name: "idx; DROP", Table: "files", Columns: []string{"store"}}},
+			},
+			wantErr: "invalid index name",
+		},
+		{
+			name: "bad index table",
+			provider: &testProvider{
+				name: "test", table: "files",
+				indexes: []Index{{Name: "test_idx", Table: "bad table", Columns: []string{"store"}}},
+			},
+			wantErr: "invalid index table",
+		},
+		{
+			name: "bad index column",
+			provider: &testProvider{
+				name: "test", table: "files",
+				indexes: []Index{{Name: "test_idx", Table: "files", Columns: []string{"a; DROP"}}},
+			},
+			wantErr: "invalid index column",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := EnsureSchema(db, tt.provider)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error %q should contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestEnsureSchemaCrossTableIndex(t *testing.T) {
 	db := openTestDB(t)
 
