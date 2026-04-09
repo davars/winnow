@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "Bash(go build:*)",
+      "Bash(go test:*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)"
     ]

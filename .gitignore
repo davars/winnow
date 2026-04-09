@@ -1,0 +1,29 @@
+# Go binary
+winnow
+
+# Test binaries
+*.test
+
+# Coverage
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# Nix
+result
+result-*
+
+# Winnow data (never commit databases)
+*.db
+*.db-wal
+*.db-shm
