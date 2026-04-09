@@ -457,8 +457,10 @@ Tests (in-memory DB): core tables created by hardcoded DDL, add column to existi
 
 **Deviation:** Tests use temp-dir on-disk databases (via `Open()`) rather than in-memory DBs, since `Open()` calls `os.MkdirAll` on the path and doesn't support `":memory:"`.
 
-### Phase 3: Worker Pool
+### Phase 3: Worker Pool ✅
 `worker/worker.go` — the batch-processing pool with coordinator loop + N workers. Tests use an **in-memory SQLite database** with a real WorkSource that uses a table, inserts pending rows, and processes them. Validates: correct result count enforcement (panic on mismatch), schema validation in WriteBatch (panic on bad keys), error results (logged to process_errors, not fatal), progress output, graceful shutdown on context cancellation, stats tracking.
+
+**Deviation:** Worker goroutine panics (from result count mismatch) are recovered and re-panicked on the coordinator goroutine so they are observable by callers and tests. Schema validation in WriteBatch is the responsibility of each WorkSource implementation rather than being enforced generically by the pool. The coordinator sends chunks directly (no separate sender goroutine) and uses `sync.WaitGroup` to ensure clean worker shutdown before re-panicking, avoiding goroutine leaks.
 
 ### Phase 4: Walk
 `winnow enrich walk` — scans all configured stores, populates `files` (using the hardcoded base schema), updates `reconciled_at`. Also populates/updates the `directories` table via UPSERT with recursive file counts and cumulative sizes. Directories no longer on disk are deleted from the table. Walk does not know about sha256, mime_type, or any enricher columns.
