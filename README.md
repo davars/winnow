@@ -54,4 +54,4 @@ data_dir  = "/mnt/backup/.winnow"
 
 ## Status
 
-Early development. Only `init` and `status` commands are implemented. The database is created with core tables but no enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init` and `status` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.

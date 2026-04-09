@@ -436,17 +436,17 @@ Interactive only (personal tool, one box). Prompts for the four required paths, 
 
 ## Phased Implementation
 
-### Phase 0: README + Plan Commit
+### Phase 0: README + Plan Commit ✅
 Create `README.md` covering motivation and high-level design (what the tool does, why it exists, the enrichment/rules pipeline concept). No installation or usage instructions yet — just context. Commit the README and the plan file (`PLAN.md`, copied from the Claude plans dir) as the initial commit. Delete `manifest-rhodium.txt` before committing.
 
 The README is a living document: each subsequent phase updates it to cover what is actually implemented and any caveats (e.g., "only walk is implemented so far; enrichers coming soon"). Only document what exists — no aspirational feature lists.
 
-### Phase 1: Skeleton + Config + CLI + DB
+### Phase 1: Skeleton + Config + CLI + DB ✅
 `main.go`, `cmd/{root,init,status}.go`, `config/config.go`, `db/db.go`, `go.mod`. Minimal config (just the four paths for now). `winnow init` prompts + writes config. `winnow status` loads config, opens/creates DB with WAL mode, creates hardcoded core tables (`files`, `directories`, `operations`, `process_errors`), prints stats (all zeros). Status handles missing columns gracefully (columns added by later phases may not exist yet).
 
 Tests: config load from file, config search order, DB creation, WAL mode enabled, core tables exist.
 
-### Phase 2: Schema Management
+### Phase 2: Schema Management ✅
 `db/schema.go` — manages the delta on top of base tables. `Columns()` adds nullable columns via `ALTER TABLE ADD COLUMN`. `Indexes()` manages indexes via `CREATE INDEX IF NOT EXISTS` / `DROP INDEX IF EXISTS`. Compares declared state vs `PRAGMA table_info` / `PRAGMA index_list`. Idempotent. Stale columns are attempted to be dropped via `ALTER TABLE DROP COLUMN` (warn on failure). Stale indexes are dropped.
 
 Core tables (`files`, `operations`, `process_errors`) are created by hardcoded `CREATE TABLE IF NOT EXISTS` in the `db` package. Enricher base tables use a templated `CREATE TABLE` with validated table name (`^[a-zA-Z_][a-zA-Z0-9_]*$`). Schema management only handles columns and indexes beyond these base schemas.
@@ -454,6 +454,8 @@ Core tables (`files`, `operations`, `process_errors`) are created by hardcoded `
 This defers full migrations (renames, type changes, data restructuring) until we actually need them. Add columns + add/remove indexes + attempt to drop stale columns is all we need for now.
 
 Tests (in-memory DB): core tables created by hardcoded DDL, add column to existing table, add/drop index, idempotent re-run, enricher base table created from template, table name validation rejects bad names, stale column drop attempted (success case + warning on failure).
+
+**Deviation:** Tests use temp-dir on-disk databases (via `Open()`) rather than in-memory DBs, since `Open()` calls `os.MkdirAll` on the path and doesn't support `":memory:"`.
 
 ### Phase 3: Worker Pool
 `worker/worker.go` — the batch-processing pool with coordinator loop + N workers. Tests use an **in-memory SQLite database** with a real WorkSource that uses a table, inserts pending rows, and processes them. Validates: correct result count enforcement (panic on mismatch), schema validation in WriteBatch (panic on bad keys), error results (logged to process_errors, not fatal), progress output, graceful shutdown on context cancellation, stats tracking.
@@ -507,4 +509,5 @@ After each phase:
 - `go build ./...` compiles
 - `go test ./...` passes (all phases' tests, not just the current one)
 - Update `README.md` to reflect what is now implemented (commands, caveats, known limitations)
+- Update `PLAN.md`: mark the phase as complete (✅ on heading), and note any deviations from the original plan in the phase description
 - Commit the phase. Committed artifacts should only contain content relevant to the code as it stands — no plan details, implementation journey notes, or conversation context. The commit message summarizes what was added/changed.
