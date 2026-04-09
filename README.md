@@ -23,6 +23,35 @@ Winnow has three processing phases:
 
 3. **Rules** query the enriched metadata and produce a plan of file operations (move to clean, move to trash, remove empty directory). Rules run in priority order; the first rule to claim a file wins. Plans can be reviewed before execution.
 
+## Usage
+
+### Setup
+
+```
+winnow init
+```
+
+Interactive setup that prompts for four directory paths (raw, clean, trash, data) and writes a config file to `$XDG_CONFIG_HOME/winnow/winnow.toml`.
+
+### Status
+
+```
+winnow status [-v]
+```
+
+Shows database statistics (file counts, operations, errors). Use `-v` for verbose output including config paths.
+
+### Config
+
+Config is located via search order: `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
+
+```toml
+raw_dir   = "/mnt/backup/raw"
+clean_dir = "/mnt/backup/clean"
+trash_dir = "/mnt/backup/trash"
+data_dir  = "/mnt/backup/.winnow"
+```
+
 ## Status
 
-This project is in early development. No commands are implemented yet. See `PLAN.md` for the full design and phased implementation plan.
+Early development. Only `init` and `status` commands are implemented. The database is created with core tables but no enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.

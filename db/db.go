@@ -1,0 +1,130 @@
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	_ "modernc.org/sqlite"
+)
+
+// Core table DDL. These are hardcoded Layer 1 schemas.
+const createTables = `
+CREATE TABLE IF NOT EXISTS files (
+    id            INTEGER PRIMARY KEY,
+    store         TEXT NOT NULL,
+    path          TEXT NOT NULL,
+    size          INTEGER NOT NULL,
+    mod_time      TEXT NOT NULL,
+    found_at      TEXT NOT NULL,
+    reconciled_at TEXT NOT NULL,
+    missing       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(store, path)
+);
+
+CREATE TABLE IF NOT EXISTS directories (
+    id            INTEGER PRIMARY KEY,
+    store         TEXT NOT NULL,
+    path          TEXT NOT NULL,
+    file_count    INTEGER NOT NULL,
+    total_size    INTEGER NOT NULL,
+    UNIQUE(store, path)
+);
+
+CREATE TABLE IF NOT EXISTS operations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id     INTEGER REFERENCES files(id),
+    dir_id      INTEGER REFERENCES directories(id),
+    src_store   TEXT NOT NULL,
+    src_path    TEXT NOT NULL,
+    dst_store   TEXT,
+    dst_path    TEXT,
+    rule        TEXT NOT NULL,
+    reason      TEXT,
+    executed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS process_errors (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id     INTEGER,
+    dir_id      INTEGER,
+    enricher    TEXT,
+    rule        TEXT,
+    error       TEXT NOT NULL,
+    occurred_at TEXT NOT NULL
+);
+`
+
+// Open opens (or creates) the SQLite database at the given path,
+// enables WAL mode, and creates the core tables.
+func Open(dbPath string) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, fmt.Errorf("creating data directory: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening database: %w", err)
+	}
+
+	// Enable WAL mode for concurrent reads during writes.
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enabling WAL mode: %w", err)
+	}
+	if mode != "wal" {
+		db.Close()
+		return nil, fmt.Errorf("expected WAL mode, got %q", mode)
+	}
+
+	if _, err := db.Exec(createTables); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("creating tables: %w", err)
+	}
+
+	return db, nil
+}
+
+// Stats holds summary counts from the database.
+type Stats struct {
+	Files       int64
+	Directories int64
+	Missing     int64
+	Operations  int64
+	Errors      int64
+}
+
+// GetStats queries the database for summary statistics.
+// It handles missing columns gracefully (columns added by later phases).
+func GetStats(db *sql.DB) (*Stats, error) {
+	var s Stats
+
+	err := db.QueryRow("SELECT COUNT(*) FROM files WHERE missing = 0").Scan(&s.Files)
+	if err != nil {
+		return nil, fmt.Errorf("counting files: %w", err)
+	}
+
+	err = db.QueryRow("SELECT COUNT(*) FROM files WHERE missing = 1").Scan(&s.Missing)
+	if err != nil {
+		return nil, fmt.Errorf("counting missing: %w", err)
+	}
+
+	err = db.QueryRow("SELECT COUNT(*) FROM directories").Scan(&s.Directories)
+	if err != nil {
+		return nil, fmt.Errorf("counting directories: %w", err)
+	}
+
+	err = db.QueryRow("SELECT COUNT(*) FROM operations").Scan(&s.Operations)
+	if err != nil {
+		return nil, fmt.Errorf("counting operations: %w", err)
+	}
+
+	err = db.QueryRow("SELECT COUNT(*) FROM process_errors").Scan(&s.Errors)
+	if err != nil {
+		return nil, fmt.Errorf("counting errors: %w", err)
+	}
+
+	return &s, nil
+}
