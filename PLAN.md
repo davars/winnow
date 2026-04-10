@@ -490,12 +490,19 @@ Tests: hashes computed correctly, missing files skipped, stale hash detected whe
 - `go.mod` relaxed from `go 1.26.2` to `go 1.26.1`, since nixpkgs only packages 1.26.1 at this time. The `1.26.2` value was only whatever toolchain was installed locally at Phase 1; nothing in the code depends on 1.26.2 specifically.
 - `go.mod` also cleaned up by `go mod tidy` — direct deps (`BurntSushi/toml`, `spf13/cobra`, `modernc.org/sqlite`) are now in their own require block instead of all being marked `// indirect`. This was needed for `buildGoModule` to accept the source.
 
-### Phase 8: MIME Type Detection
+### Phase 8: MIME Type Detection ✅
 Built-in enricher. Declares `mime_type TEXT` column on `files` via schema management. Detects MIME type by shelling out to `file --mime-type --brief` (libmagic — accurate for media formats including HEIC, RAW, video codecs). `winnow mime`. Uses worker pool.
 
 Tests: correct MIME detection for common types (JPEG, PNG, HEIC, PDF, plain text), NULL for unreadable files.
 
 **External-tool dependency note (applies to Phase 8 and later):** Code paths that shell out to `file`, `exiftool`, or `ffmpeg` must fail hard with a clear "binary X not on PATH" error rather than skipping or degrading silently. This makes "ran outside the devShell" mistakes immediately obvious. Tests that exercise these paths assume the binary is present; they will fail without the flake's devShell (or equivalent) active. Document this in the error message and/or test setup.
+
+**Deviations:**
+- Added a `mime_checked_at TEXT` column alongside `mime_type` so staleness can be tracked against `mod_time` the same way sha256 uses `hashed_at`. FetchBatch picks up any file where `mime_checked_at IS NULL OR mime_checked_at < mod_time`. Without this column, there would be no way to re-detect a MIME type after a file is modified in place.
+- On detection errors (including unreadable files), `mime_checked_at` is set to `now` while `mime_type` stays NULL, mirroring sha256's retry-on-modification behavior.
+- `file` exits 0 even for unreadable inputs — it prints things like `regular file, no read permission`. Output is validated to contain `/` (i.e., looks like `type/subtype`) and anything else is treated as an error.
+- The HEIC/PNG/JPEG/text/PDF test uses minimal magic-byte payloads embedded as hex literals rather than real test fixtures — keeps the repo free of binary blobs. Minimum-valid PNG is a 67-byte signature + IHDR + IDAT + IEND sequence; JPEG needs the JFIF header marker.
+- `Process` batches an entire chunk into one `file` invocation (`ProcessBatch = 64` by default). `file --brief` emits one line per input in order; we zip with the items. A single exec per 64 files instead of 64 execs is a 10–50x wall-time improvement on large backup drives. No HEIC test case — libmagic version dependency makes it flaky to assert across systems; the other four types exercise the same code path.
 
 ### Phase 9: Two-Pass Enricher Framework + EXIF Enricher
 `enricher/{enricher,exif}.go`, `IdentifyByMimeType` helper, auto-generated WorkSource from enricher schema. The exif enricher declares its table name; runtime creates the base table from the template, then schema management adds enricher-specific columns. Identification uses MIME types (image/jpeg, image/heic, image/tiff, etc.) rather than file extensions. Exercises batch processing (`ProcessBatch = 100`, one exiftool invocation per batch).

@@ -19,6 +19,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newWalkCmd())
 	root.AddCommand(newReconcileCmd())
 	root.AddCommand(newSHA256Cmd())
+	root.AddCommand(newMimeCmd())
 
 	return root
 }

@@ -143,6 +143,14 @@ winnow sha256 [--workers N]
 
 Computes SHA-256 content hashes for files that haven't been hashed yet, or whose content has changed since the last hash (detected by comparing `mod_time` against `hashed_at`). Missing files are skipped. Uses a worker pool for parallel hashing; `--workers` controls concurrency (default: number of CPUs). Files that fail to hash are logged to `process_errors` and skipped; they will be retried if the file is modified on disk.
 
+### MIME
+
+```
+winnow mime [--workers N]
+```
+
+Detects MIME types by shelling out to `file --mime-type --brief` (libmagic, bundled by the flake). Stores the result in `files.mime_type`, with a companion `mime_checked_at` column used for staleness tracking against `mod_time` (same pattern as sha256). Files that fail detection (including unreadable files) are logged to `process_errors` and skipped; they will be retried if the file is modified on disk.
+
 ### Config
 
 Config is located via search order: `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
@@ -159,4 +167,4 @@ max_staleness = "48h"  # default; files not seen within this window are marked m
 
 ## Status
 
-Early development. The `init`, `status`, `walk`, `reconcile`, and `sha256` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes using the worker pool. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init`, `status`, `walk`, `reconcile`, `sha256`, and `mime` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes using the worker pool; mime detection populates `mime_type` via libmagic. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). No two-pass enrichers or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
