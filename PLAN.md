@@ -474,10 +474,12 @@ Tests (temp dirs on disk): walk inserts new files, walk updates reconciled_at on
 
 Tests: files with old reconciled_at get marked missing, recently-walked files are untouched, already-missing files are skipped (idempotent), multiple stores handled, config parsing with default and custom values.
 
-### Phase 6: SHA-256
+### Phase 6: SHA-256 ✅
 `winnow sha256` — first real consumer of the worker pool. Declares `sha256 TEXT` and `hashed_at TEXT` columns on `files` via schema management. Processes files where `sha256 IS NULL OR hashed_at < mod_time` and `missing = 0`. Re-hashing is automatic: when walk updates mod_time (because the file changed), hashed_at becomes stale and sha256 gets recomputed on next run.
 
-Tests: hashes computed correctly, missing files skipped, stale hash detected when mod_time > hashed_at, progress output works.
+Tests: hashes computed correctly, missing files skipped, stale hash detected when mod_time > hashed_at, idempotent re-run, error on unreadable file logged to process_errors.
+
+**Deviation:** The FetchBatch condition uses `hashed_at IS NULL OR hashed_at < mod_time` instead of `sha256 IS NULL OR hashed_at < mod_time`. On hash errors, `hashed_at` is set (with `sha256` left NULL) so the file isn't re-fetched endlessly; it will be retried only if walk updates `mod_time` (file changed on disk).
 
 ### Phase 7: Nix Flake
 `flake.nix` — packages the Go binary + external tools (exiftool, file/libmagic, ffmpeg). `devShell` with go, gopls, gotools, exiftool, file, ffmpeg, sqlite. Prerequisite for MIME detection and EXIF enricher which shell out to `file` and `exiftool`.
