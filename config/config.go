@@ -38,6 +38,15 @@ func (c *Config) DBPath() string {
 	return filepath.Join(c.DataDir, "winnow.db")
 }
 
+// Stores returns a map of store name to directory path.
+func (c *Config) Stores() map[string]string {
+	return map[string]string{
+		"raw":   c.RawDir,
+		"clean": c.CleanDir,
+		"trash": c.TrashDir,
+	}
+}
+
 // Load reads and parses a config file from the given path.
 func Load(path string) (*Config, error) {
 	var cfg Config

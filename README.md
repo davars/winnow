@@ -41,6 +41,14 @@ winnow status [-v]
 
 Shows database statistics (file counts, operations, errors). Use `-v` for verbose output including config paths.
 
+### Walk
+
+```
+winnow enrich walk
+```
+
+Scans all configured stores (raw, clean, trash) and populates the database. New files are inserted; existing files have their `reconciled_at`, `size`, and `mod_time` updated. Files previously marked missing are rediscovered if they reappear on disk. The `directories` table is maintained with recursive file counts and cumulative sizes; directories no longer on disk are removed.
+
 ### Config
 
 Config is located via search order: `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
@@ -54,4 +62,4 @@ data_dir  = "/mnt/backup/.winnow"
 
 ## Status
 
-Early development. The `init` and `status` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init`, `status`, and `enrich walk` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. Walking populates the `files` and `directories` tables from the filesystem. No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.

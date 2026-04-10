@@ -462,10 +462,12 @@ Tests (in-memory DB): core tables created by hardcoded DDL, add column to existi
 
 **Deviation:** Worker goroutine panics (from result count mismatch) are recovered and re-panicked on the coordinator goroutine so they are observable by callers and tests. Schema validation in WriteBatch is the responsibility of each WorkSource implementation rather than being enforced generically by the pool. The coordinator sends chunks directly (no separate sender goroutine) and uses `sync.WaitGroup` to ensure clean worker shutdown before re-panicking, avoiding goroutine leaks.
 
-### Phase 4: Walk
+### Phase 4: Walk ✅
 `winnow enrich walk` — scans all configured stores, populates `files` (using the hardcoded base schema), updates `reconciled_at`. Also populates/updates the `directories` table via UPSERT with recursive file counts and cumulative sizes. Directories no longer on disk are deleted from the table. Walk does not know about sha256, mime_type, or any enricher columns.
 
 Tests (temp dirs on disk): walk inserts new files, walk updates reconciled_at on re-walk, walk updates size/mod_time when file changes, walk handles files across multiple stores, directories table populated with correct file_count and total_size, stale directory rows deleted.
+
+**Deviation:** Stats report `FilesFound` (total files seen on disk) rather than separate insert/update counts, since SQLite UPSERT doesn't cleanly distinguish the two cases. An additional test verifies that previously-missing files are rediscovered (missing flag reset to 0).
 
 ### Phase 5: Reconcile
 `winnow enrich reconcile` — marks files as missing based on staleness. Adds `[reconcile] max_staleness` to config.

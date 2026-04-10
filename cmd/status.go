@@ -25,17 +25,7 @@ func newStatusCmd() *cobra.Command {
 }
 
 func runStatus(verbose bool) error {
-	path, err := config.Find(cfgFile)
-	if err != nil {
-		return err
-	}
-
-	cfg, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-
-	database, err := db.Open(cfg.DBPath())
+	cfg, database, err := openDB()
 	if err != nil {
 		return err
 	}
@@ -54,7 +44,8 @@ func runStatus(verbose bool) error {
 	fmt.Printf("Errors:      %d\n", stats.Errors)
 
 	if verbose {
-		fmt.Printf("\nConfig: %s\n", path)
+		cfgPath, _ := config.Find(cfgFile)
+		fmt.Printf("\nConfig: %s\n", cfgPath)
 		fmt.Printf("  raw_dir:   %s\n", cfg.RawDir)
 		fmt.Printf("  clean_dir: %s\n", cfg.CleanDir)
 		fmt.Printf("  trash_dir: %s\n", cfg.TrashDir)
