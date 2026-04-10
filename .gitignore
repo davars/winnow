@@ -13,8 +13,9 @@ winnow
 *.swp
 *~
 
-# Claude Code local settings
+# Claude Code
 .claude/settings.local.json
+memory/
 
 # macOS
 .DS_Store
