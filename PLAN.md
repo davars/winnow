@@ -469,10 +469,10 @@ Tests (temp dirs on disk): walk inserts new files, walk updates reconciled_at on
 
 **Deviation:** Stats report `FilesFound` (total files seen on disk) rather than separate insert/update counts, since SQLite UPSERT doesn't cleanly distinguish the two cases. An additional test verifies that previously-missing files are rediscovered (missing flag reset to 0).
 
-### Phase 5: Reconcile
+### Phase 5: Reconcile ✅
 `winnow enrich reconcile` — marks files as missing based on staleness. Adds `[reconcile] max_staleness` to config.
 
-Tests: files with old reconciled_at get marked missing, recently-walked files are untouched, missing files are skipped by subsequent enrichers.
+Tests: files with old reconciled_at get marked missing, recently-walked files are untouched, already-missing files are skipped (idempotent), multiple stores handled, config parsing with default and custom values.
 
 ### Phase 6: SHA-256
 `winnow enrich sha256` — first real consumer of the worker pool. Declares `sha256 TEXT` and `hashed_at TEXT` columns on `files` via schema management. Processes files where `sha256 IS NULL OR hashed_at < mod_time` and `missing = 0`. Re-hashing is automatic: when walk updates mod_time (because the file changed), hashed_at becomes stale and sha256 gets recomputed on next run.

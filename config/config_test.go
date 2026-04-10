@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadValidConfig(t *testing.T) {
@@ -148,6 +149,65 @@ func TestFindSearchOrder(t *testing.T) {
 	}
 	if found != explicitPath {
 		t.Errorf("Find() = %q, want %q (explicit should win)", found, explicitPath)
+	}
+}
+
+func TestMaxStalenessDuration(t *testing.T) {
+	// Default when not configured.
+	cfg := Config{RawDir: "/r", CleanDir: "/c", TrashDir: "/t", DataDir: "/d"}
+	d, err := cfg.MaxStalenessDuration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != 48*time.Hour {
+		t.Errorf("default MaxStalenessDuration = %v, want 48h", d)
+	}
+
+	// Configured value.
+	cfg.Reconcile.MaxStaleness = "24h"
+	d, err = cfg.MaxStalenessDuration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != 24*time.Hour {
+		t.Errorf("configured MaxStalenessDuration = %v, want 24h", d)
+	}
+
+	// Invalid value.
+	cfg.Reconcile.MaxStaleness = "bogus"
+	_, err = cfg.MaxStalenessDuration()
+	if err == nil {
+		t.Error("expected error for invalid max_staleness")
+	}
+}
+
+func TestLoadConfigWithReconcile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "winnow.toml")
+	content := `
+raw_dir   = "/tmp/raw"
+clean_dir = "/tmp/clean"
+trash_dir = "/tmp/trash"
+data_dir  = "/tmp/data"
+
+[reconcile]
+max_staleness = "24h"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := cfg.MaxStalenessDuration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != 24*time.Hour {
+		t.Errorf("MaxStalenessDuration = %v, want 24h", d)
 	}
 }
 

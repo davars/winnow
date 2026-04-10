@@ -4,9 +4,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
+
+// DefaultMaxStaleness is the default max_staleness if not configured.
+const DefaultMaxStaleness = "48h"
+
+// ReconcileConfig holds reconcile-specific configuration.
+type ReconcileConfig struct {
+	MaxStaleness string `toml:"max_staleness"`
+}
 
 // Config holds the application configuration.
 type Config struct {
@@ -14,6 +23,8 @@ type Config struct {
 	CleanDir string `toml:"clean_dir"`
 	TrashDir string `toml:"trash_dir"`
 	DataDir  string `toml:"data_dir"`
+
+	Reconcile ReconcileConfig `toml:"reconcile"`
 }
 
 // Validate checks that all required fields are set.
@@ -36,6 +47,16 @@ func (c *Config) Validate() error {
 // DBPath returns the path to the SQLite database file.
 func (c *Config) DBPath() string {
 	return filepath.Join(c.DataDir, "winnow.db")
+}
+
+// MaxStalenessDuration returns the parsed max_staleness duration,
+// falling back to DefaultMaxStaleness if not configured.
+func (c *Config) MaxStalenessDuration() (time.Duration, error) {
+	s := c.Reconcile.MaxStaleness
+	if s == "" {
+		s = DefaultMaxStaleness
+	}
+	return time.ParseDuration(s)
 }
 
 // Stores returns a map of store name to directory path.

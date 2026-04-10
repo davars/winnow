@@ -11,6 +11,7 @@ func newEnrichCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newWalkCmd())
+	cmd.AddCommand(newReconcileCmd())
 
 	return cmd
 }
