@@ -40,7 +40,7 @@ The flake targets `{x86_64,aarch64}-{linux,darwin}` and pins `nixpkgs` to `nixos
 On any machine with Nix installed and flakes enabled:
 
 ```sh
-nix profile install github:davars/winnow
+nix profile add github:davars/winnow
 winnow --help
 ```
 
@@ -60,7 +60,7 @@ If the server does not have internet access but you have SSH, build locally and 
 nix copy --to ssh://user@server github:davars/winnow
 ```
 
-then run `nix profile install` on the server using the store path printed by `nix build`.
+then run `nix profile add` on the server using the store path printed by `nix build`.
 
 ### Enable flakes
 
@@ -77,7 +77,7 @@ The repository ships an `.envrc` that loads the flake's devShell via [`direnv`](
 One-time setup:
 
 ```sh
-nix profile install nixpkgs#direnv      # or: brew install direnv
+nix profile add nixpkgs#direnv          # or: brew install direnv
 
 # hook into zsh (or bash/fish equivalent)
 echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
@@ -92,7 +92,7 @@ direnv allow
 `cd`ing into the directory loads the devShell; `cd`ing out restores the previous environment. Flake evaluation can take a few seconds on first entry — installing [`nix-direnv`](https://github.com/nix-community/nix-direnv) on top (it caches the evaluation) makes subsequent loads near-instant:
 
 ```sh
-nix profile install nixpkgs#nix-direnv
+nix profile add nixpkgs#nix-direnv
 mkdir -p ~/.config/direnv
 echo 'source $HOME/.nix-profile/share/nix-direnv/direnvrc' >> ~/.config/direnv/direnvrc
 ```
