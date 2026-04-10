@@ -481,13 +481,21 @@ Tests: hashes computed correctly, missing files skipped, stale hash detected whe
 
 **Deviation:** The FetchBatch condition uses `hashed_at IS NULL OR hashed_at < mod_time` instead of `sha256 IS NULL OR hashed_at < mod_time`. On hash errors, `hashed_at` is set (with `sha256` left NULL) so the file isn't re-fetched endlessly; it will be retried only if walk updates `mod_time` (file changed on disk).
 
-### Phase 7: Nix Flake
+### Phase 7: Nix Flake ✅
 `flake.nix` — packages the Go binary + external tools (exiftool, file/libmagic, ffmpeg). `devShell` with go, gopls, gotools, exiftool, file, ffmpeg, sqlite. Prerequisite for MIME detection and EXIF enricher which shell out to `file` and `exiftool`.
+
+**Deviations:**
+- Pinned to `nixos-25.11` (not `nixos-25.05` as originally planned) since the project requires Go 1.26, which isn't available in 25.05.
+- `buildGoModule` is overridden with `go_1_26` (nixos-25.11's default `go` is still 1.25).
+- `go.mod` relaxed from `go 1.26.2` to `go 1.26.1`, since nixpkgs only packages 1.26.1 at this time. The `1.26.2` value was only whatever toolchain was installed locally at Phase 1; nothing in the code depends on 1.26.2 specifically.
+- `go.mod` also cleaned up by `go mod tidy` — direct deps (`BurntSushi/toml`, `spf13/cobra`, `modernc.org/sqlite`) are now in their own require block instead of all being marked `// indirect`. This was needed for `buildGoModule` to accept the source.
 
 ### Phase 8: MIME Type Detection
 Built-in enricher. Declares `mime_type TEXT` column on `files` via schema management. Detects MIME type by shelling out to `file --mime-type --brief` (libmagic — accurate for media formats including HEIC, RAW, video codecs). `winnow mime`. Uses worker pool.
 
 Tests: correct MIME detection for common types (JPEG, PNG, HEIC, PDF, plain text), NULL for unreadable files.
+
+**External-tool dependency note (applies to Phase 8 and later):** Code paths that shell out to `file`, `exiftool`, or `ffmpeg` must fail hard with a clear "binary X not on PATH" error rather than skipping or degrading silently. This makes "ran outside the devShell" mistakes immediately obvious. Tests that exercise these paths assume the binary is present; they will fail without the flake's devShell (or equivalent) active. Document this in the error message and/or test setup.
 
 ### Phase 9: Two-Pass Enricher Framework + EXIF Enricher
 `enricher/{enricher,exif}.go`, `IdentifyByMimeType` helper, auto-generated WorkSource from enricher schema. The exif enricher declares its table name; runtime creates the base table from the template, then schema management adds enricher-specific columns. Identification uses MIME types (image/jpeg, image/heic, image/tiff, etc.) rather than file extensions. Exercises batch processing (`ProcessBatch = 100`, one exiftool invocation per batch).

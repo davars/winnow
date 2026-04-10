@@ -23,6 +23,84 @@ Winnow has three processing phases:
 
 3. **Rules** query the enriched metadata and produce a plan of file operations (move to clean, move to trash, remove empty directory). Rules run in priority order; the first rule to claim a file wins. Plans can be reviewed before execution.
 
+## Installation
+
+Winnow is packaged as a Nix flake. The flake builds the Go binary and wraps it so external tools (`exiftool`, `file`/libmagic, `ffmpeg`) are on `PATH` at runtime.
+
+```
+nix build github:davars/winnow       # build the wrapped binary → ./result/bin/winnow
+nix run  github:davars/winnow -- --help
+nix develop                          # dev shell with go, gopls, exiftool, file, ffmpeg, sqlite
+```
+
+The flake targets `{x86_64,aarch64}-{linux,darwin}` and pins `nixpkgs` to `nixos-25.11`.
+
+### Installing on a server
+
+On any machine with Nix installed and flakes enabled:
+
+```sh
+nix profile install github:davars/winnow
+winnow --help
+```
+
+This builds a closure containing the binary and every runtime dependency (`exiftool`, `file`, `ffmpeg`), drops a wrapped `winnow` into the user profile, and puts it on `PATH`. No system package manager required -- the server does not need `exiftool`/`file`/`ffmpeg` installed separately.
+
+To upgrade after a new release:
+
+```sh
+nix profile upgrade winnow
+```
+
+On NixOS, prefer adding the flake as an input in `configuration.nix` and installing via `environment.systemPackages` so the binary is managed alongside the rest of the system.
+
+If the server does not have internet access but you have SSH, build locally and copy the closure over:
+
+```sh
+nix copy --to ssh://user@server github:davars/winnow
+```
+
+then run `nix profile install` on the server using the store path printed by `nix build`.
+
+### Enable flakes
+
+The `nix` CLI and flakes are gated behind experimental feature flags. Enable them once in `~/.config/nix/nix.conf` (create the file if it doesn't exist):
+
+```
+experimental-features = nix-command flakes
+```
+
+## Development
+
+The repository ships an `.envrc` that loads the flake's devShell via [`direnv`](https://direnv.net/). With direnv installed and hooked into your shell, `cd`ing into the repo puts `go`, `gopls`, `exiftool`, `file`, `ffmpeg`, and `sqlite` on `PATH` automatically — editors and terminals launched from that directory inherit the env with no per-tool configuration.
+
+One-time setup:
+
+```sh
+nix profile install nixpkgs#direnv      # or: brew install direnv
+
+# hook into zsh (or bash/fish equivalent)
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
+```
+
+Then from the repo:
+
+```sh
+direnv allow
+```
+
+`cd`ing into the directory loads the devShell; `cd`ing out restores the previous environment. Flake evaluation can take a few seconds on first entry — installing [`nix-direnv`](https://github.com/nix-community/nix-direnv) on top (it caches the evaluation) makes subsequent loads near-instant:
+
+```sh
+nix profile install nixpkgs#nix-direnv
+mkdir -p ~/.config/direnv
+echo 'source $HOME/.nix-profile/share/nix-direnv/direnvrc' >> ~/.config/direnv/direnvrc
+```
+
+For VS Code, install the `mkhl.direnv` extension so the editor picks up the same environment — `gopls`, debuggers, and integrated terminals will resolve binaries through the flake instead of whatever happens to be on the system `PATH`.
+
+Without direnv, the fallback is `nix develop` to drop into an interactive shell, or `nix develop --command <cmd>` to run a single command in the devShell env.
+
 ## Usage
 
 ### Setup
@@ -81,4 +159,4 @@ max_staleness = "48h"  # default; files not seen within this window are marked m
 
 ## Status
 
-Early development. The `init`, `status`, `walk`, `reconcile`, and `sha256` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes using the worker pool. No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init`, `status`, `walk`, `reconcile`, and `sha256` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes using the worker pool. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.

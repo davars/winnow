@@ -24,6 +24,9 @@ memory/
 result
 result-*
 
+# direnv
+.direnv/
+
 # Winnow data (never commit databases)
 *.db
 *.db-wal
