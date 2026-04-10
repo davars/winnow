@@ -44,7 +44,7 @@ Shows database statistics (file counts, operations, errors). Use `-v` for verbos
 ### Walk
 
 ```
-winnow enrich walk
+winnow walk
 ```
 
 Scans all configured stores (raw, clean, trash) and populates the database. New files are inserted; existing files have their `reconciled_at`, `size`, and `mod_time` updated. Files previously marked missing are rediscovered if they reappear on disk. The `directories` table is maintained with recursive file counts and cumulative sizes; directories no longer on disk are removed.
@@ -52,7 +52,7 @@ Scans all configured stores (raw, clean, trash) and populates the database. New 
 ### Reconcile
 
 ```
-winnow enrich reconcile
+winnow reconcile
 ```
 
 Marks files as missing if they haven't been seen by a walk within the staleness threshold. Files already marked missing are skipped. The threshold is configurable via `[reconcile] max_staleness` in the config (default: 48h). A typical workflow is to run `walk` first, then `reconcile` to flag files that have disappeared from disk.
@@ -73,4 +73,4 @@ max_staleness = "48h"  # default; files not seen within this window are marked m
 
 ## Status
 
-Early development. The `init`, `status`, `enrich walk`, and `enrich reconcile` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing. No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init`, `status`, `walk`, and `reconcile` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) provides the foundation for parallel enrichment passes. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing. No enrichment or rules are available yet. See `PLAN.md` for the full design and phased implementation plan.

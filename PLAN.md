@@ -348,7 +348,7 @@ winnow/
 ├── flake.nix
 ├── main.go
 ├── winnow.toml.example
-├── cmd/           # CLI commands (root, init, enrich, plan, process, status)
+├── cmd/           # CLI commands (root, init, walk, reconcile, sha256, mime, exif, plan, process, status)
 ├── config/        # Config struct + TOML loader with search-path
 ├── db/            # SQLite open/migrate, core files table, schema management
 ├── worker/        # Generic batch-processing worker pool
@@ -396,21 +396,21 @@ winnow status                  # DB stats (grows richer as phases add data)
   -v, --verbose
 
 # Phase 4
-winnow enrich walk             # walk all stores, populate/reconcile files table
+winnow walk             # walk all stores, populate/reconcile files table
 
 # Phase 5
-winnow enrich reconcile        # mark stale files as missing
+winnow reconcile        # mark stale files as missing
 
 # Phase 6
-winnow enrich sha256           # compute hashes for files missing them
+winnow sha256           # compute hashes for files missing them
   --workers N                  # parallel workers (default: num CPUs)
 
 # Phase 8
-winnow enrich mime             # detect MIME types
+winnow mime             # detect MIME types
 
 # Phase 9
-winnow enrich exif             # exif enricher (identify + process)
-winnow enrich exif --identify  # just the identify pass
+winnow exif             # exif enricher (identify + process)
+winnow exif --identify  # just the identify pass
 
 # Phase 10
 winnow plan                    # run all rules in order, print proposed operations (dry-run)
@@ -463,19 +463,19 @@ Tests (in-memory DB): core tables created by hardcoded DDL, add column to existi
 **Deviation:** Worker goroutine panics (from result count mismatch) are recovered and re-panicked on the coordinator goroutine so they are observable by callers and tests. Schema validation in WriteBatch is the responsibility of each WorkSource implementation rather than being enforced generically by the pool. The coordinator sends chunks directly (no separate sender goroutine) and uses `sync.WaitGroup` to ensure clean worker shutdown before re-panicking, avoiding goroutine leaks.
 
 ### Phase 4: Walk ✅
-`winnow enrich walk` — scans all configured stores, populates `files` (using the hardcoded base schema), updates `reconciled_at`. Also populates/updates the `directories` table via UPSERT with recursive file counts and cumulative sizes. Directories no longer on disk are deleted from the table. Walk does not know about sha256, mime_type, or any enricher columns.
+`winnow walk` — scans all configured stores, populates `files` (using the hardcoded base schema), updates `reconciled_at`. Also populates/updates the `directories` table via UPSERT with recursive file counts and cumulative sizes. Directories no longer on disk are deleted from the table. Walk does not know about sha256, mime_type, or any enricher columns.
 
 Tests (temp dirs on disk): walk inserts new files, walk updates reconciled_at on re-walk, walk updates size/mod_time when file changes, walk handles files across multiple stores, directories table populated with correct file_count and total_size, stale directory rows deleted.
 
 **Deviation:** Stats report `FilesFound` (total files seen on disk) rather than separate insert/update counts, since SQLite UPSERT doesn't cleanly distinguish the two cases. An additional test verifies that previously-missing files are rediscovered (missing flag reset to 0).
 
 ### Phase 5: Reconcile ✅
-`winnow enrich reconcile` — marks files as missing based on staleness. Adds `[reconcile] max_staleness` to config.
+`winnow reconcile` — marks files as missing based on staleness. Adds `[reconcile] max_staleness` to config.
 
 Tests: files with old reconciled_at get marked missing, recently-walked files are untouched, already-missing files are skipped (idempotent), multiple stores handled, config parsing with default and custom values.
 
 ### Phase 6: SHA-256
-`winnow enrich sha256` — first real consumer of the worker pool. Declares `sha256 TEXT` and `hashed_at TEXT` columns on `files` via schema management. Processes files where `sha256 IS NULL OR hashed_at < mod_time` and `missing = 0`. Re-hashing is automatic: when walk updates mod_time (because the file changed), hashed_at becomes stale and sha256 gets recomputed on next run.
+`winnow sha256` — first real consumer of the worker pool. Declares `sha256 TEXT` and `hashed_at TEXT` columns on `files` via schema management. Processes files where `sha256 IS NULL OR hashed_at < mod_time` and `missing = 0`. Re-hashing is automatic: when walk updates mod_time (because the file changed), hashed_at becomes stale and sha256 gets recomputed on next run.
 
 Tests: hashes computed correctly, missing files skipped, stale hash detected when mod_time > hashed_at, progress output works.
 
@@ -483,7 +483,7 @@ Tests: hashes computed correctly, missing files skipped, stale hash detected whe
 `flake.nix` — packages the Go binary + external tools (exiftool, file/libmagic, ffmpeg). `devShell` with go, gopls, gotools, exiftool, file, ffmpeg, sqlite. Prerequisite for MIME detection and EXIF enricher which shell out to `file` and `exiftool`.
 
 ### Phase 8: MIME Type Detection
-Built-in enricher. Declares `mime_type TEXT` column on `files` via schema management. Detects MIME type by shelling out to `file --mime-type --brief` (libmagic — accurate for media formats including HEIC, RAW, video codecs). `winnow enrich mime`. Uses worker pool.
+Built-in enricher. Declares `mime_type TEXT` column on `files` via schema management. Detects MIME type by shelling out to `file --mime-type --brief` (libmagic — accurate for media formats including HEIC, RAW, video codecs). `winnow mime`. Uses worker pool.
 
 Tests: correct MIME detection for common types (JPEG, PNG, HEIC, PDF, plain text), NULL for unreadable files.
 
