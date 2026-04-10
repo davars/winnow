@@ -276,6 +276,38 @@ func TestStaleDirectoryDeleted(t *testing.T) {
 	}
 }
 
+func TestWalkSkipsUnreadableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses permission checks")
+	}
+
+	database, cfg := testSetup(t)
+
+	writeFile(t, cfg.RawDir, "readable.txt", "ok")
+	writeFile(t, cfg.RawDir, "locked/secret.txt", "nope")
+
+	lockedDir := filepath.Join(cfg.RawDir, "locked")
+	if err := os.Chmod(lockedDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(lockedDir, 0o755) })
+
+	stats, err := Run(context.Background(), database, cfg)
+	if err != nil {
+		t.Fatalf("walk should not bail on permission errors: %v", err)
+	}
+
+	if stats.FilesFound != 1 {
+		t.Errorf("FilesFound = %d, want 1 (only readable.txt should be walked)", stats.FilesFound)
+	}
+
+	var count int
+	database.QueryRow(`SELECT COUNT(*) FROM files WHERE store = 'raw' AND path = 'readable.txt'`).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected readable.txt in DB, count=%d", count)
+	}
+}
+
 func TestMissingFileRediscovered(t *testing.T) {
 	database, cfg := testSetup(t)
 

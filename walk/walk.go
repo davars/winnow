@@ -3,8 +3,10 @@ package walk
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -39,6 +41,15 @@ type dirStats struct {
 	totalSize int64
 }
 
+// isSkippable reports whether a filesystem error should be logged and
+// walked past rather than aborting the whole walk. Permission errors
+// (EACCES/EPERM) are common on backup drives — e.g. Synology @eaDir,
+// macOS metadata, or cross-user directories — and should not stop a walk.
+// Files that vanish mid-walk (ENOENT) are also harmless.
+func isSkippable(err error) bool {
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist)
+}
+
 func walkStore(ctx context.Context, db *sql.DB, store, baseDir string) (Stats, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	var stats Stats
@@ -70,6 +81,13 @@ func walkStore(ctx context.Context, db *sql.DB, store, baseDir string) (Stats, e
 
 	err = filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if isSkippable(err) {
+				fmt.Fprintf(os.Stderr, "walk: skipping %s: %v\n", path, err)
+				if d != nil && d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 			return err
 		}
 
@@ -89,6 +107,10 @@ func walkStore(ctx context.Context, db *sql.DB, store, baseDir string) (Stats, e
 
 		info, err := d.Info()
 		if err != nil {
+			if isSkippable(err) {
+				fmt.Fprintf(os.Stderr, "walk: skipping %s: %v\n", path, err)
+				return nil
+			}
 			return err
 		}
 
