@@ -1,6 +1,6 @@
 # Winnow
 
-A file organization tool for cleaning up old backups on a Linux/ZFS server.
+A file organization tool for cleaning up disorganized messes of files
 
 ## Motivation
 
