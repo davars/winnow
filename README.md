@@ -17,9 +17,9 @@ Key principles:
 
 Winnow has three processing phases:
 
-1. **Built-in steps** write directly to the core `files` table: walk (discover files), reconcile (mark missing files), sha256 (content hashing), and MIME detection.
+1. **Built-in steps** write directly to the core `files` table: walk (discover files), reconcile (mark missing files), and sha256 (content hashing).
 
-2. **Enrichers** are two-pass: first identify candidates (pure DB operation), then process them in parallel using a worker pool. Each enricher owns a table keyed on content hash. Example: the EXIF enricher extracts camera metadata from images.
+2. **Enrichers** are two-pass: first identify candidates (pure DB operation), then process them in parallel using a worker pool. Each enricher owns a table keyed on content hash. Examples: the MIME enricher detects content types via libmagic; the EXIF enricher extracts camera metadata from images.
 
 3. **Rules** query the enriched metadata and produce a plan of file operations (move to clean, move to trash, remove empty directory). Rules run in priority order; the first rule to claim a file wins. Plans can be reviewed before execution.
 
@@ -149,7 +149,7 @@ Computes SHA-256 content hashes for files that haven't been hashed yet, or whose
 winnow mime [--workers N]
 ```
 
-Detects MIME types by shelling out to `file --mime-type --brief` (libmagic, bundled by the flake). Stores the result in `files.mime_type`, with a companion `mime_checked_at` column used for staleness tracking against `mod_time` (same pattern as sha256). Files that fail detection (including unreadable files) are logged to `process_errors` and skipped; they will be retried if the file is modified on disk.
+Detects MIME types by shelling out to `file --mime-type --brief` (libmagic, bundled by the flake). Runs as a two-pass enricher: the identify pass inserts one candidate per unique `sha256`, and the process pass populates `mime.mime_type` keyed on content hash. Multiple files sharing the same content are detected once. Prerequisites: `winnow walk` and `winnow sha256` must have run first. Files that fail detection are logged to `process_errors` and not retried until their content changes.
 
 ### EXIF
 

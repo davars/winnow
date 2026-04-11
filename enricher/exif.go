@@ -4,9 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/davars/winnow/db"
@@ -30,7 +28,8 @@ var ImageMimeTypes = []string{
 }
 
 // EXIF identifies candidates by MIME type (not extension) so renamed or
-// extensionless files are still picked up.
+// extensionless files are still picked up. Requires the mime enricher to
+// have run first.
 type EXIF struct{}
 
 func (EXIF) Name() string      { return "exif" }
@@ -127,22 +126,7 @@ func runExiftool(ctx context.Context, items []worker.WorkItem) ([]byte, error) {
 	for _, item := range items {
 		args = append(args, item.Path)
 	}
-
-	cmd := exec.CommandContext(ctx, "exiftool", args...)
-	out, err := cmd.Output()
-	if err == nil {
-		return out, nil
-	}
-
-	if errors.Is(err, exec.ErrNotFound) {
-		return out, fmt.Errorf("exiftool binary not found on PATH: %w", err)
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return out, fmt.Errorf("exiftool exited %d: %s",
-			exitErr.ExitCode(), strings.TrimSpace(string(exitErr.Stderr)))
-	}
-	return out, err
+	return runTool(ctx, "exiftool", args...)
 }
 
 // decodeExifString handles exiftool's occasional numeric emission of Make/Model

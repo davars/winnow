@@ -9,7 +9,6 @@ import (
 
 	"github.com/davars/winnow/config"
 	"github.com/davars/winnow/db"
-	"github.com/davars/winnow/mime"
 	"github.com/davars/winnow/sha256"
 	"github.com/davars/winnow/walk"
 	"github.com/davars/winnow/worker"
@@ -55,9 +54,9 @@ func writeFile(t *testing.T, dir, rel string, content []byte) {
 	}
 }
 
-// walkHashMime runs the full prereq pipeline so enricher tests start with a
-// populated files table including sha256 and mime_type.
-func walkHashMime(t *testing.T, database *sql.DB, cfg *config.Config) {
+// walkHash runs walk + sha256 so enricher tests start with a populated
+// files table including content hashes.
+func walkHash(t *testing.T, database *sql.DB, cfg *config.Config) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := walk.Run(ctx, database, cfg); err != nil {
@@ -66,7 +65,12 @@ func walkHashMime(t *testing.T, database *sql.DB, cfg *config.Config) {
 	if _, err := sha256.Run(ctx, database, cfg.Stores(), worker.Opts{Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mime.Run(ctx, database, cfg.Stores(), worker.Opts{Workers: 1}); err != nil {
+}
+
+func walkHashMime(t *testing.T, database *sql.DB, cfg *config.Config) {
+	t.Helper()
+	walkHash(t, database, cfg)
+	if _, _, err := Run(context.Background(), database, Mime{}, cfg.Stores(), worker.Opts{Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 }

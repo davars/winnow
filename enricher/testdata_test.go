@@ -15,6 +15,8 @@ const exifJPEGHex = "ffd8ffe100a44578696600004d4d002a000000080004010f00020000000
 // Used as a control image that carries no EXIF data.
 const minimalPNGHex = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6300010000000500010d0a2db40000000049454e44ae426082"
 
+const minimalPDF = "%PDF-1.4\n%%EOF\n"
+
 func mustHex(t *testing.T, s string) []byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)

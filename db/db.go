@@ -58,8 +58,8 @@ CREATE TABLE IF NOT EXISTS process_errors (
 
 // filesProvider declares every extension column and index on the files table.
 // The db package is the single owner of the files table's schema — no other
-// package should declare columns on it. Packages that compute content-derived
-// data (sha256, mime) write into these columns but do not manage them.
+// package should declare columns on it. The sha256 package writes into these
+// columns but does not manage them.
 type filesProvider struct{}
 
 func (filesProvider) Name() string      { return "files" }
@@ -69,8 +69,6 @@ func (filesProvider) Columns() []Column {
 	return []Column{
 		{Name: "sha256", Type: "TEXT"},
 		{Name: "hashed_at", Type: "TEXT"},
-		{Name: "mime_type", Type: "TEXT"},
-		{Name: "mime_checked_at", Type: "TEXT"},
 	}
 }
 

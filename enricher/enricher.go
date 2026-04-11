@@ -5,7 +5,9 @@ package enricher
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +16,25 @@ import (
 	"github.com/davars/winnow/db"
 	"github.com/davars/winnow/worker"
 )
+
+// runTool executes an external binary and returns its stdout, classifying
+// exec.ErrNotFound and *exec.ExitError into wrapped errors with a consistent
+// format. Used by enrichers that shell out to e.g. `file` or `exiftool`.
+func runTool(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, bin, args...).Output()
+	if err == nil {
+		return out, nil
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return out, fmt.Errorf("%s binary not found on PATH: %w", bin, err)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return out, fmt.Errorf("%s exited %d: %s",
+			bin, exitErr.ExitCode(), strings.TrimSpace(string(exitErr.Stderr)))
+	}
+	return out, err
+}
 
 type (
 	Column = db.Column
@@ -32,9 +53,35 @@ type Enricher interface {
 	ProcessBatch() int
 }
 
-// IdentifyByMimeType inserts one candidate row per unique hash of non-missing
-// files whose mime_type matches any of the given types and that aren't already
-// in the enricher table. Returns the number of rows inserted.
+// IdentifyAllHashes inserts one candidate row per unique content hash of
+// non-missing files that aren't already in the enricher table. Used by
+// enrichers that apply to every file regardless of type (e.g. MIME).
+func IdentifyAllHashes(ctx context.Context, database *sql.DB, table string) (int, error) {
+	query := fmt.Sprintf(`
+		INSERT OR IGNORE INTO %s (hash, file_id, processed_at)
+		SELECT f.sha256, f.id, NULL
+		FROM files f
+		LEFT JOIN %s e ON e.hash = f.sha256
+		WHERE f.sha256 IS NOT NULL
+		  AND f.missing = 0
+		  AND e.hash IS NULL
+	`, table, table)
+
+	res, err := database.ExecContext(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("identify %s: %w", table, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// IdentifyByMimeType inserts one candidate row per unique hash whose mime_type
+// (from the mime enricher table) matches any of the given types and that
+// isn't already in the target table. Prerequisites: walk, sha256, and the
+// mime enricher must have run first.
 func IdentifyByMimeType(ctx context.Context, database *sql.DB, table string, mimeTypes []string) (int, error) {
 	if len(mimeTypes) == 0 {
 		return 0, nil
@@ -43,14 +90,13 @@ func IdentifyByMimeType(ctx context.Context, database *sql.DB, table string, mim
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(mimeTypes)), ",")
 	query := fmt.Sprintf(`
 		INSERT OR IGNORE INTO %s (hash, file_id, processed_at)
-		SELECT f.sha256, MIN(f.id), NULL
-		FROM files f
-		WHERE f.sha256 IS NOT NULL
-		  AND f.missing = 0
-		  AND f.mime_type IN (%s)
-		  AND f.sha256 NOT IN (SELECT hash FROM %s)
-		GROUP BY f.sha256
-	`, table, placeholders, table)
+		SELECT m.hash, f.id, NULL
+		FROM mime m
+		JOIN files f ON f.sha256 = m.hash AND f.missing = 0
+		LEFT JOIN %s e ON e.hash = m.hash
+		WHERE m.mime_type IN (%s)
+		  AND e.hash IS NULL
+	`, table, table, placeholders)
 
 	args := make([]any, len(mimeTypes))
 	for i, m := range mimeTypes {

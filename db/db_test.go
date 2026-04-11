@@ -84,7 +84,7 @@ func TestCoreTableColumns(t *testing.T) {
 		table   string
 		columns []string
 	}{
-		{"files", []string{"id", "store", "path", "size", "mod_time", "found_at", "reconciled_at", "missing", "sha256", "hashed_at", "mime_type", "mime_checked_at"}},
+		{"files", []string{"id", "store", "path", "size", "mod_time", "found_at", "reconciled_at", "missing", "sha256", "hashed_at"}},
 		{"directories", []string{"id", "store", "path", "file_count", "total_size"}},
 		{"operations", []string{"id", "file_id", "dir_id", "src_store", "src_path", "dst_store", "dst_path", "rule", "reason", "executed_at"}},
 		{"process_errors", []string{"id", "file_id", "dir_id", "enricher", "rule", "error", "occurred_at"}},

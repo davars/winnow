@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/davars/winnow/mime"
+	"github.com/davars/winnow/enricher"
 	"github.com/davars/winnow/worker"
 	"github.com/spf13/cobra"
 )
@@ -32,15 +32,15 @@ func runMime(cmd *cobra.Command, workers int) error {
 	}
 	defer database.Close()
 
-	stats, err := mime.Run(cmd.Context(), database, cfg.Stores(), worker.Opts{
+	identified, stats, err := enricher.Run(cmd.Context(), database, enricher.Mime{}, cfg.Stores(), worker.Opts{
 		Workers: workers,
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("MIME detection complete: %d files processed, %d errors (%s)\n",
-		stats.Processed, stats.Errors, stats.Duration.Round(100*time.Millisecond))
+	fmt.Printf("MIME detection complete: %d new candidates identified, %d processed, %d errors (%s)\n",
+		identified, stats.Processed, stats.Errors, stats.Duration.Round(100*time.Millisecond))
 
 	return nil
 }
