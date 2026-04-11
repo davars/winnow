@@ -21,6 +21,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newSHA256Cmd())
 	root.AddCommand(newMimeCmd())
 	root.AddCommand(newExifCmd())
+	root.AddCommand(newQueryCmd())
 
 	return root
 }

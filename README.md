@@ -159,6 +159,19 @@ winnow exif [--workers N] [--identify]
 
 First real two-pass enricher. The **identify** pass inserts a row in the `exif` table for each unique content hash whose MIME type matches a known image format (JPEG, HEIC, TIFF, PNG, WebP, common RAW formats). The **process** pass calls `exiftool -json` in batches of 100 files, pulling `CreateDate`, `Make`, and `Model` from the output. Prerequisites: `winnow walk`, `winnow sha256`, and `winnow mime` must have already populated the relevant columns. Use `--identify` to run only the identify pass (populate candidates without running exiftool). Processing errors (per-file `exiftool` failures) are logged to `process_errors`; the row is marked processed so it won't be retried until the file content changes.
 
+### Query
+
+```
+winnow query [SQL]
+winnow query [SQL] --format {table,tsv,csv} [--no-header]
+```
+
+Runs an ad-hoc SQL query against the winnow database and prints the result. If no SQL argument is given, the query is read from stdin. Two custom SQL functions are registered: `human_bytes(n)` (SI units, e.g. `"1.5 kB"`) and `human_ibytes(n)` (IEC units, e.g. `"1.5 KiB"`), both backed by `go-humanize`. NULL passes through; negative inputs return an error.
+
+```
+winnow query "SELECT path, human_ibytes(total_size) FROM directories ORDER BY total_size DESC LIMIT 30"
+```
+
 ### Config
 
 Config is located via search order: `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
@@ -175,4 +188,4 @@ max_staleness = "48h"  # default; files not seen within this window are marked m
 
 ## Status
 
-Early development. The `init`, `status`, `walk`, `reconcile`, `sha256`, `mime`, and `exif` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) powers sha256, mime, and all enrichers. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes; mime detection populates `mime_type` via libmagic; the EXIF enricher extracts camera metadata from images via `exiftool`. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). No organization rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init`, `status`, `walk`, `reconcile`, `sha256`, `mime`, `exif`, and `query` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) powers sha256, mime, and all enrichers. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes; mime detection populates `mime_type` via libmagic; the EXIF enricher extracts camera metadata from images via `exiftool`. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). No organization rules are available yet. See `PLAN.md` for the full design and phased implementation plan.
