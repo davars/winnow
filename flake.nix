@@ -60,7 +60,7 @@
             exiftool
             file
             ffmpeg
-            sqlite
+            sqlite-interactive
           ];
         };
       });

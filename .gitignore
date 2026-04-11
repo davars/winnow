@@ -26,6 +26,7 @@ result-*
 
 # direnv
 .direnv/
+.sqlite_history
 
 # Winnow data (never commit databases)
 *.db
