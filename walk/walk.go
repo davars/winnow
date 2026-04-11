@@ -96,6 +96,19 @@ func walkStore(ctx context.Context, db *sql.DB, store, baseDir string) (Stats, e
 		}
 
 		if d.IsDir() {
+			// Register every directory visited so empty directories appear
+			// in the table. The junk rule relies on this to propose removing
+			// `file_count = 0` directories. File iteration below will
+			// increment the counts for ancestor directories.
+			var rel string
+			if path == baseDir {
+				rel = "."
+			} else {
+				rel = path[prefixLen:]
+			}
+			if _, ok := dirs[rel]; !ok {
+				dirs[rel] = &dirStats{}
+			}
 			return nil
 		}
 

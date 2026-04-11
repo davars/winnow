@@ -22,6 +22,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newMimeCmd())
 	root.AddCommand(newExifCmd())
 	root.AddCommand(newQueryCmd())
+	root.AddCommand(newPlanCmd())
+	root.AddCommand(newProcessCmd())
 
 	return root
 }

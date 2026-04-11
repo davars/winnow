@@ -24,6 +24,8 @@ type Config struct {
 	TrashDir string `toml:"trash_dir"`
 	DataDir  string `toml:"data_dir"`
 
+	PreProcessHook string `toml:"pre_process_hook,omitempty"`
+
 	Reconcile ReconcileConfig `toml:"reconcile"`
 }
 

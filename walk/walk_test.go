@@ -241,6 +241,38 @@ func TestDirectoryStats(t *testing.T) {
 	}
 }
 
+func TestEmptyDirectoriesTracked(t *testing.T) {
+	database, cfg := testSetup(t)
+
+	if err := os.MkdirAll(filepath.Join(cfg.RawDir, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.RawDir, "also/empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Run(context.Background(), database, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rel := range []string{"empty", "also", "also/empty"} {
+		var count int
+		var fileCount int64
+		if err := database.QueryRow(
+			`SELECT COUNT(*), COALESCE(SUM(file_count), 0) FROM directories WHERE store = 'raw' AND path = ?`,
+			rel,
+		).Scan(&count, &fileCount); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("%s: expected 1 row, got %d", rel, count)
+		}
+		if fileCount != 0 {
+			t.Errorf("%s: file_count = %d, want 0", rel, fileCount)
+		}
+	}
+}
+
 func TestStaleDirectoryDeleted(t *testing.T) {
 	database, cfg := testSetup(t)
 

@@ -517,10 +517,19 @@ Tests: enricher base table created from template, enricher-specific columns adde
 - EXIF `CreateDate` is stored in exiftool's native `YYYY:MM:DD HH:MM:SS` format rather than normalized to RFC3339 — no timezone information is present in EXIF, and the organize rule (Phase 11+) can parse the format itself.
 - Test fixture for EXIF data: a 287-byte minimal JPEG with Make/Model/CreateDate tags, generated once by running exiftool against a hand-crafted minimal JPEG and embedded in `enricher/testdata_test.go` as a hex literal. Keeps binary blobs out of the repo, same approach as the MIME tests.
 
-### Phase 10: Junk Rule + Plan/Execute
+### Phase 10: Junk Rule + Plan/Execute ✅
 `rule/{rule,junk}.go`, `plan/plan.go`, `cmd/{plan,process}.go`. Junk patterns are hardcoded in the rule. Two pattern types: (1) **file name matches** — files whose name matches exactly (e.g., `.DS_Store`, `Thumbs.db`, `._.DS_Store`); (2) **directory name matches** — all files whose path contains the named directory as a component are junk, plus the directory itself is proposed for `OpRemoveDir` (e.g., `@eaDir`, `.Spotlight-V100`, `.Trashes`). The junk rule also proposes removing empty directories from all stores (queries `directories` table for `file_count = 0`, uses `OpRemoveDir`). Rules run one at a time, first-claims-wins via `claimed` set. Plan shows proposed ops, pre_process_hook runs, process executes + updates files + logs to operations. Errors logged to process_errors.
 
 Tests (temp dirs): plan produces correct ops for junk files, plan proposes trashing empty directories, process moves files and updates DB, pre_process_hook invoked, errors logged and skipped.
+
+**Deviations:**
+
+- Walk did not previously track directories with zero files (an entry was only created for a directory when walk saw a file inside it), so the junk rule's "remove empty directories from all stores" logic had nothing to match against. Fixed by having `walkStore` register every directory visited by `filepath.WalkDir` with zero counts up-front; file iteration then increments the counts for ancestors. Verified by a new `TestEmptyDirectoriesTracked` test in `walk/walk_test.go`.
+- Junk file name matches include the macOS `._` resource-fork prefix as a prefix rule, not just exact filename matches, to catch the large volume of these files that accumulates on backup drives with macOS history.
+- Junk-directory-component matches apply only to the raw store (file rules only touch raw per the design). The empty-directory sweep applies to every store. A directory matching both rules yields one `OpRemoveDir` with the more-specific "junk directory" reason.
+- Store roots (`path = '.'`) are never proposed for removal even if empty — that would be removing the store itself.
+- `plan.Execute` batches DB writes into one transaction per 500 ops (`dbBatchSize` in `plan/plan.go`). Filesystem work still happens one op at a time so partial progress is preserved on error, but the batched transaction avoids the one-fsync-per-op cost that would otherwise dominate wall time on million-file runs. Per-op failures are recorded as `process_errors` rows inside the same batch transaction so a failure-logging error is the only thing that can abort execution mid-batch.
+- `executeRemoveDir` treats `os.ErrNotExist` on the target directory as a success path, so a stale `directories` row left over from a prior manual cleanup gets removed from the DB on the next `winnow process` run.
 
 ### Phase 11: Dedup Rule
 `rule/dedup.go`. Queries files for duplicate sha256. Two cases: (1) if any copy already exists in clean or trash, all raw copies are trashed; (2) if duplicates are only in raw, keeps the copy with the shortest path (tiebreaker: lexicographic — `ORDER BY length(path), path`) and trashes the rest.

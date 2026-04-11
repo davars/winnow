@@ -181,6 +181,30 @@ func TestMaxStalenessDuration(t *testing.T) {
 	}
 }
 
+func TestLoadConfigWithPreProcessHook(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "winnow.toml")
+	content := `
+raw_dir   = "/tmp/raw"
+clean_dir = "/tmp/clean"
+trash_dir = "/tmp/trash"
+data_dir  = "/tmp/data"
+
+pre_process_hook = "/usr/local/bin/snapshot.sh"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PreProcessHook != "/usr/local/bin/snapshot.sh" {
+		t.Errorf("PreProcessHook = %q, want /usr/local/bin/snapshot.sh", cfg.PreProcessHook)
+	}
+}
+
 func TestLoadConfigWithReconcile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "winnow.toml")
