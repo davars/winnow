@@ -231,15 +231,25 @@ func getIndexes(db *sql.DB, provider SchemaProvider) (map[string]bool, error) {
 	return indexes, nil
 }
 
-// getBaseColumns returns the set of base column names for known table types.
+// getBaseColumns returns the set of column names that EnsureSchema must never
+// drop when managing a table. For the files table this includes both the
+// hardcoded core columns AND the extension columns owned by filesProvider, so
+// that any other provider that happens to be run against "files" (e.g. in
+// tests) cannot drop them as "stale".
+//
+// Core tables are enumerated; unknown tables are assumed to be enricher base
+// tables (hash, file_id, processed_at).
 func getBaseColumns(table string) map[string]bool {
-	// Core tables (Layer 1).
 	switch table {
 	case "files":
-		return map[string]bool{
+		base := map[string]bool{
 			"id": true, "store": true, "path": true, "size": true,
 			"mod_time": true, "found_at": true, "reconciled_at": true, "missing": true,
 		}
+		for _, c := range (filesProvider{}).Columns() {
+			base[c.Name] = true
+		}
+		return base
 	case "directories":
 		return map[string]bool{
 			"id": true, "store": true, "path": true, "file_count": true, "total_size": true,
@@ -255,7 +265,6 @@ func getBaseColumns(table string) map[string]bool {
 			"error": true, "occurred_at": true,
 		}
 	default:
-		// Enricher base table (Layer 2).
 		return map[string]bool{
 			"hash": true, "file_id": true, "processed_at": true,
 		}

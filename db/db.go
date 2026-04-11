@@ -56,6 +56,30 @@ CREATE TABLE IF NOT EXISTS process_errors (
 );
 `
 
+// filesProvider declares every extension column and index on the files table.
+// The db package is the single owner of the files table's schema — no other
+// package should declare columns on it. Packages that compute content-derived
+// data (sha256, mime) write into these columns but do not manage them.
+type filesProvider struct{}
+
+func (filesProvider) Name() string      { return "files" }
+func (filesProvider) TableName() string { return "files" }
+
+func (filesProvider) Columns() []Column {
+	return []Column{
+		{Name: "sha256", Type: "TEXT"},
+		{Name: "hashed_at", Type: "TEXT"},
+		{Name: "mime_type", Type: "TEXT"},
+		{Name: "mime_checked_at", Type: "TEXT"},
+	}
+}
+
+func (filesProvider) Indexes() []Index {
+	return []Index{
+		{Name: "files_sha256", Table: "files", Columns: []string{"sha256"}},
+	}
+}
+
 // Open opens (or creates) the SQLite database at the given path,
 // enables WAL mode, and creates the core tables.
 func Open(dbPath string) (*sql.DB, error) {
@@ -82,6 +106,11 @@ func Open(dbPath string) (*sql.DB, error) {
 	if _, err := db.Exec(createTables); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating tables: %w", err)
+	}
+
+	if err := EnsureSchema(db, filesProvider{}); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ensuring files schema: %w", err)
 	}
 
 	return db, nil

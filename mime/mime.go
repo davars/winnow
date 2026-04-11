@@ -10,24 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/davars/winnow/db"
 	"github.com/davars/winnow/worker"
 )
 
-// Provider declares the mime_type and mime_checked_at columns on the files table.
-type Provider struct{}
-
-func (Provider) Name() string      { return "mime" }
-func (Provider) TableName() string { return "files" }
-
-func (Provider) Columns() []db.Column {
-	return []db.Column{
-		{Name: "mime_type", Type: "TEXT"},
-		{Name: "mime_checked_at", Type: "TEXT"},
-	}
-}
-
-func (Provider) Indexes() []db.Index { return nil }
+const enricherName = "mime"
 
 // Source implements worker.WorkSource for MIME detection.
 type Source struct {
@@ -87,11 +73,10 @@ func (s *Source) WriteBatch(ctx context.Context, database *sql.DB, results []wor
 	}
 	defer errStmt.Close()
 
-	name := Provider{}.Name()
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, r := range results {
 		if r.Err != nil {
-			if _, err := errStmt.ExecContext(ctx, r.Item.FileID, name, r.Err.Error(), now); err != nil {
+			if _, err := errStmt.ExecContext(ctx, r.Item.FileID, enricherName, r.Err.Error(), now); err != nil {
 				return err
 			}
 			// Set mime_checked_at so the file isn't re-fetched endlessly;
@@ -185,11 +170,9 @@ func detectBatch(ctx context.Context, items []worker.WorkItem) ([]string, error)
 // just ARG_MAX.
 const DefaultProcessBatch = 64
 
-// Run sets up schema, then runs the worker pool for MIME detection.
+// Run runs the worker pool for MIME detection. The files table schema is
+// managed by db.Open.
 func Run(ctx context.Context, database *sql.DB, stores map[string]string, opts worker.Opts) (worker.Stats, error) {
-	if err := db.EnsureSchema(database, Provider{}); err != nil {
-		return worker.Stats{}, fmt.Errorf("ensuring mime schema: %w", err)
-	}
 	if opts.ProcessBatch == 0 {
 		opts.ProcessBatch = DefaultProcessBatch
 	}

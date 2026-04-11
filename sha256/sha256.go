@@ -11,24 +11,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/davars/winnow/db"
 	"github.com/davars/winnow/worker"
 )
 
-// Provider declares the sha256 and hashed_at columns on the files table.
-type Provider struct{}
-
-func (Provider) Name() string      { return "sha256" }
-func (Provider) TableName() string { return "files" }
-
-func (Provider) Columns() []db.Column {
-	return []db.Column{
-		{Name: "sha256", Type: "TEXT"},
-		{Name: "hashed_at", Type: "TEXT"},
-	}
-}
-
-func (Provider) Indexes() []db.Index { return nil }
+const enricherName = "sha256"
 
 // Source implements worker.WorkSource for SHA-256 hashing.
 type Source struct {
@@ -87,12 +73,10 @@ func (s *Source) WriteBatch(ctx context.Context, database *sql.DB, results []wor
 	}
 	defer errStmt.Close()
 
-	name := Provider{}.Name()
-
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, r := range results {
 		if r.Err != nil {
-			if _, err := errStmt.ExecContext(ctx, r.Item.FileID, name, r.Err.Error(), now); err != nil {
+			if _, err := errStmt.ExecContext(ctx, r.Item.FileID, enricherName, r.Err.Error(), now); err != nil {
 				return err
 			}
 			// Set hashed_at so the file isn't re-fetched endlessly.
@@ -151,12 +135,9 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Run sets up schema, then runs the worker pool for SHA-256 hashing.
+// Run runs the worker pool for SHA-256 hashing. The files table schema is
+// managed by db.Open.
 func Run(ctx context.Context, database *sql.DB, stores map[string]string, opts worker.Opts) (worker.Stats, error) {
-	if err := db.EnsureSchema(database, Provider{}); err != nil {
-		return worker.Stats{}, fmt.Errorf("ensuring sha256 schema: %w", err)
-	}
-
 	source := &Source{Stores: stores}
 	return worker.Run(ctx, database, source, Process, opts)
 }
