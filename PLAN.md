@@ -532,9 +532,9 @@ Tests (temp dirs): plan produces correct ops for junk files, plan proposes trash
 - `executeRemoveDir` treats `os.ErrNotExist` on the target directory as a success path, so a stale `directories` row left over from a prior manual cleanup gets removed from the DB on the next `winnow process` run.
 
 ### Phase 11: Dedup Rule
-`rule/dedup.go`. Queries files for duplicate sha256. Two cases: (1) if any copy already exists in clean or trash, all raw copies are trashed; (2) if duplicates are only in raw, keeps the copy with the shortest path (tiebreaker: lexicographic — `ORDER BY length(path), path`) and trashes the rest.
+`rule/dedup.go`. Queries raw-store files for duplicate sha256. Groups by hash; for each group with more than one raw file, keeps the copy with the shortest path (tiebreaker: lexicographic — `ORDER BY length(path), path`) and trashes the rest. Clean and trash stores are not scanned — raw is the canonical source, and the user may intentionally place multiple copies in clean under different organization schemes.
 
-Tests: correct duplicate detection, raw copies trashed when clean copy exists, shortest path kept among raw-only duplicates, lexicographic tiebreaker on equal length, plan output correct, integration with claimed set from prior rules.
+Tests: duplicate raw files reduced to one, shortest path kept, lexicographic tiebreaker on equal length, clean/trash duplicates do not affect raw, plan output correct, integration with claimed set from prior rules.
 
 ### Future phases
 Photo organize rule (needs more design thinking), embeddings, clustering, cross-filesystem copy fallback, orphaned enricher data cleanup.
