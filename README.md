@@ -166,13 +166,21 @@ winnow plan [rule]
 winnow process [rule]
 ```
 
-`plan` runs all rules in hardcoded priority order and prints the proposed file operations without touching the filesystem. `process` does the same, then executes the plan. With an optional rule name argument, only that rule is evaluated (currently only `junk` is implemented).
+`plan` runs all rules in hardcoded priority order and prints the proposed file operations without touching the filesystem. `process` does the same, then executes the plan. With an optional rule name argument, only that rule is evaluated.
 
-The only rule available right now is `junk`, which:
+Rules run in priority order; the first rule to claim a file wins. Currently implemented:
 
-- **Trashes** files in the raw store whose name matches a hardcoded junk pattern (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `ehthumbs.db`, `.localized`, `._*` macOS resource forks, …).
-- **Trashes** files in the raw store whose path contains a junk directory component (`@eaDir`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.DocumentRevisions-V100`, `.TemporaryItems`, `__MACOSX`), and proposes `RMDIR` for the containing directory.
+**junk** —
+
+- Trashes files in the raw store whose name matches a hardcoded junk pattern (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `ehthumbs.db`, `.localized`, `._*` macOS resource forks, …).
+- Trashes files in the raw store whose path contains a junk directory component (`@eaDir`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`, `.DocumentRevisions-V100`, `.TemporaryItems`, `__MACOSX`), and proposes `RMDIR` for the containing directory.
 - Proposes `RMDIR` for empty directories in every store (any `directories` row with `file_count = 0`).
+
+**dedup** —
+
+- Groups raw-store files by sha256 hash. For each hash with more than one raw file, keeps the copy with the shortest path (tiebreaker: lexicographic) and trashes the rest.
+- Clean and trash stores are not scanned — raw is the canonical source, and the user may intentionally place multiple copies in clean under different organization schemes.
+- Files already claimed by a prior rule (e.g. junk) are excluded from dedup groups. Prerequisites: `winnow walk` and `winnow sha256` must have run first.
 
 Files proposed for trashing are moved to the trash store preserving their relative path; the original `files` row is updated (store + path) and an `operations` row is inserted for audit. Empty (or soon-to-be-empty) directories are `os.Remove`d and their row is deleted from `directories`. If the source file has already been moved by a prior rule or is missing on disk, the individual op is logged to `process_errors` and execution continues.
 
@@ -221,4 +229,4 @@ pre_process_hook = "/usr/local/bin/winnow-snapshot.sh"
 
 ## Status
 
-Early development. The `init`, `status`, `walk`, `reconcile`, `sha256`, `mime`, `exif`, `query`, `plan`, and `process` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) powers sha256, mime, and all enrichers. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes; mime detection populates `mime_type` via libmagic; the EXIF enricher extracts camera metadata from images via `exiftool`. The first organization rule (`junk`) is implemented and can be previewed with `winnow plan` or applied with `winnow process`. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init`, `status`, `walk`, `reconcile`, `sha256`, `mime`, `exif`, `query`, `plan`, and `process` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) powers sha256, mime, and all enrichers. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes; mime detection populates `mime_type` via libmagic; the EXIF enricher extracts camera metadata from images via `exiftool`. Two organization rules are implemented: `junk` (trashes OS metadata and filesystem debris) and `dedup` (trashes duplicate files in the raw store, keeping the shortest-path copy). Both can be previewed with `winnow plan` or applied with `winnow process`. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). See `PLAN.md` for the full design and phased implementation plan.

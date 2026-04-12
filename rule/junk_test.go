@@ -28,12 +28,21 @@ func testDB(t *testing.T) (*sql.DB, *config.Config) {
 	return database, cfg
 }
 
-func insertFile(t *testing.T, database *sql.DB, store, path string) int64 {
+func insertFile(t *testing.T, database *sql.DB, store, path string, hash ...string) int64 {
 	t.Helper()
-	res, err := database.Exec(`
-		INSERT INTO files (store, path, size, mod_time, found_at, reconciled_at, missing)
-		VALUES (?, ?, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0)
-	`, store, path)
+	var res sql.Result
+	var err error
+	if len(hash) > 0 {
+		res, err = database.Exec(`
+			INSERT INTO files (store, path, size, mod_time, found_at, reconciled_at, missing, sha256, hashed_at)
+			VALUES (?, ?, 100, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0, ?, '2026-01-01T00:00:00Z')
+		`, store, path, hash[0])
+	} else {
+		res, err = database.Exec(`
+			INSERT INTO files (store, path, size, mod_time, found_at, reconciled_at, missing)
+			VALUES (?, ?, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0)
+		`, store, path)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

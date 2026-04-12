@@ -27,6 +27,7 @@ type Rule interface {
 func All() []Rule {
 	return []Rule{
 		Junk{},
+		Dedup{},
 	}
 }
 

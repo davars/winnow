@@ -531,10 +531,10 @@ Tests (temp dirs): plan produces correct ops for junk files, plan proposes trash
 - `plan.Execute` batches DB writes into one transaction per 500 ops (`dbBatchSize` in `plan/plan.go`). Filesystem work still happens one op at a time so partial progress is preserved on error, but the batched transaction avoids the one-fsync-per-op cost that would otherwise dominate wall time on million-file runs. Per-op failures are recorded as `process_errors` rows inside the same batch transaction so a failure-logging error is the only thing that can abort execution mid-batch.
 - `executeRemoveDir` treats `os.ErrNotExist` on the target directory as a success path, so a stale `directories` row left over from a prior manual cleanup gets removed from the DB on the next `winnow process` run.
 
-### Phase 11: Dedup Rule
+### Phase 11: Dedup Rule ✅
 `rule/dedup.go`. Queries raw-store files for duplicate sha256. Groups by hash; for each group with more than one raw file, keeps the copy with the shortest path (tiebreaker: lexicographic — `ORDER BY length(path), path`) and trashes the rest. Clean and trash stores are not scanned — raw is the canonical source, and the user may intentionally place multiple copies in clean under different organization schemes.
 
-Tests: duplicate raw files reduced to one, shortest path kept, lexicographic tiebreaker on equal length, clean/trash duplicates do not affect raw, plan output correct, integration with claimed set from prior rules.
+Tests: duplicate raw files reduced to one, shortest path kept, lexicographic tiebreaker on equal length, clean/trash duplicates do not affect raw, multiple hash groups handled, integration with claimed set from prior rules (junk claims .DS_Store before dedup sees it).
 
 ### Future phases
 Photo organize rule (needs more design thinking), embeddings, clustering, cross-filesystem copy fallback, orphaned enricher data cleanup.
