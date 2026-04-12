@@ -3,9 +3,11 @@ package plan
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/davars/winnow/config"
@@ -349,6 +351,50 @@ func TestExecutePreProcessHookFailureAborts(t *testing.T) {
 	// File should NOT have moved.
 	if _, err := os.Stat(filepath.Join(cfg.RawDir, ".DS_Store")); err != nil {
 		t.Errorf("source file missing after aborted hook: %v", err)
+	}
+}
+
+func TestExecutePreProcessHookReceivesStoreEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell hook test is POSIX-only")
+	}
+	database, cfg := testSetup(t)
+
+	envFile := filepath.Join(t.TempDir(), "hook.env")
+	hookPath := filepath.Join(t.TempDir(), "hook.sh")
+	hookScript := fmt.Sprintf("#!/bin/sh\nenv | grep ^WINNOW_ | sort > %s\n", envFile)
+	if err := os.WriteFile(hookPath, []byte(hookScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, cfg.RawDir, ".DS_Store", "junk")
+	fileID := insertFile(t, database, "raw", ".DS_Store")
+
+	p := &Plan{Ops: []Op{{
+		Kind: OpTrash, FileID: fileID,
+		SrcStore: "raw", SrcPath: ".DS_Store",
+		DstStore: "trash", DstPath: ".DS_Store",
+		Rule: "junk", Reason: "junk file",
+	}}}
+
+	_, err := Execute(context.Background(), database, p, ExecuteOpts{
+		Stores:         cfg.Stores(),
+		PreProcessHook: hookPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("env file not created: %v", err)
+	}
+
+	for name, dir := range cfg.Stores() {
+		want := fmt.Sprintf("WINNOW_%s_DIR=%s", strings.ToUpper(name), dir)
+		if !strings.Contains(string(got), want) {
+			t.Errorf("env missing %s; got:\n%s", want, got)
+		}
 	}
 }
 

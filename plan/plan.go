@@ -118,7 +118,7 @@ func Execute(ctx context.Context, db *sql.DB, p *Plan, opts ExecuteOpts) (Stats,
 	var stats Stats
 
 	if opts.PreProcessHook != "" {
-		if err := runHook(ctx, opts.PreProcessHook); err != nil {
+		if err := runHook(ctx, opts.PreProcessHook, opts.Stores); err != nil {
 			return stats, err
 		}
 	}
@@ -344,14 +344,25 @@ func copyAndRemove(src, dst string) error {
 	return os.Remove(src)
 }
 
-func runHook(ctx context.Context, hook string) error {
+func runHook(ctx context.Context, hook string, stores map[string]string) error {
 	cmd := exec.CommandContext(ctx, hook)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), storeEnvVars(stores)...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("pre_process_hook %q failed: %w", hook, err)
 	}
 	return nil
+}
+
+// storeEnvVars returns environment variables for each store directory,
+// e.g. WINNOW_RAW_DIR=/path/to/raw.
+func storeEnvVars(stores map[string]string) []string {
+	env := make([]string, 0, len(stores))
+	for name, dir := range stores {
+		env = append(env, fmt.Sprintf("WINNOW_%s_DIR=%s", strings.ToUpper(name), dir))
+	}
+	return env
 }
 
 func logProcessErrorTx(ctx context.Context, tx *sql.Tx, op Op, execErr error, now string) error {
