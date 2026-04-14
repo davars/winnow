@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/davars/winnow/config"
@@ -180,12 +181,20 @@ func TestProcessExtractsExifFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(data.String), &parsed); err != nil {
 		t.Fatalf("data is not valid JSON: %v (raw: %q)", err, data.String)
 	}
-	if parsed["CreateDate"] != "2024:01:15 12:30:45" {
-		t.Errorf("CreateDate = %v, want 2024:01:15 12:30:45", parsed["CreateDate"])
+	if parsed["EXIF:CreateDate"] != "2024:01:15 12:30:45" {
+		t.Errorf("EXIF:CreateDate = %v, want 2024:01:15 12:30:45", parsed["EXIF:CreateDate"])
+	}
+	// System/File/ExifTool groups are excluded at the exiftool level.
+	for k := range parsed {
+		for _, prefix := range []string{"System:", "File:", "ExifTool:"} {
+			if strings.HasPrefix(k, prefix) {
+				t.Errorf("excluded group leaked through: %q", k)
+			}
+		}
 	}
 
-	// The PNG has no timestamp EXIF tags but exiftool still reports
-	// Compression, so data should be set but contain only Compression.
+	// The PNG has no EXIF:* timestamps but exiftool still reports PNG:*
+	// container metadata (compression, color type, etc.).
 	row = database.QueryRow(`
 		SELECT e.data, e.processed_at
 		FROM exif e JOIN files f ON f.sha256 = e.hash
@@ -198,17 +207,17 @@ func TestProcessExtractsExifFields(t *testing.T) {
 		t.Error("processed_at should be set for PNG")
 	}
 	if !data.Valid {
-		t.Fatal("PNG data should be set (Compression is always reported)")
+		t.Fatal("PNG data should be set (PNG:* tags are always reported)")
 	}
 	parsed = nil
 	if err := json.Unmarshal([]byte(data.String), &parsed); err != nil {
 		t.Fatalf("PNG data is not valid JSON: %v (raw: %q)", err, data.String)
 	}
-	if _, hasDate := parsed["CreateDate"]; hasDate {
-		t.Errorf("PNG should not have CreateDate, got %v", parsed["CreateDate"])
+	if _, hasDate := parsed["EXIF:CreateDate"]; hasDate {
+		t.Errorf("PNG should not have EXIF:CreateDate, got %v", parsed["EXIF:CreateDate"])
 	}
-	if parsed["Compression"] == nil {
-		t.Errorf("PNG should have Compression, got data: %q", data.String)
+	if parsed["PNG:Compression"] == nil {
+		t.Errorf("PNG should have PNG:Compression, got data: %q", data.String)
 	}
 }
 

@@ -8,8 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
-	"strings"
 
 	"github.com/davars/winnow/db"
 	"github.com/davars/winnow/worker"
@@ -43,32 +43,48 @@ var EXIFMimeTypes = []string{
 	"video/3gpp",
 }
 
-// exifTags lists the tag names requested from exiftool and stored in the
-// `data` JSON blob. Order here controls the JSON key order in the output.
-var exifTags = []string{
-	"CreateDate",
-	"DateTimeOriginal",
-	"SubSecDateTimeOriginal",
-	"SubSecCreateDate",
-	"Compression",
+// exifToolArgs are the invariant flags passed to exiftool for every batch.
+// We ask for every tag (no -TagName filter) so the schema adapts to whatever
+// the file carries, minus groups that don't describe content: System (fs
+// attributes, already in files table), File (container bookkeeping, MIMEType
+// is in mime table), and ExifTool (exiftool's own version). -G0 prefixes tag
+// names with their family-0 group ("EXIF:CreateDate" vs "QuickTime:CreateDate")
+// so same-named tags from different groups don't collapse. -fast2 skips
+// MakerNotes (vendor-specific blobs, often hundreds of KB on RAW files).
+var exifToolArgs = []string{
+	"-json", "-fast2", "-G0",
+	"--System:all",
+	"--File:all",
+	"--ExifTool:all",
 }
 
-// exifTagsVersion is a short hash of the sorted tag list. Stored alongside
-// each processed row so changing exifTags (add, remove, rename) triggers
-// re-processing on the next Identify run.
-var exifTagsVersion = computeTagsVersion(exifTags)
+// binaryPlaceholder matches exiftool's textual stand-in for binary-valued
+// tags when -b is not supplied (e.g. "(Binary data 123 bytes, use -b option
+// to extract)"). Values matching this pattern are dropped so `data` stays
+// text, not opaque placeholders.
+var binaryPlaceholder = regexp.MustCompile(`^\(Binary data \d+ bytes`)
 
-func computeTagsVersion(tags []string) string {
-	sorted := slices.Clone(tags)
+// exifTagsVersion is a short hash of the extraction policy (exiftool args +
+// binary placeholder pattern). Stored per-row so any policy change triggers
+// re-processing on the next Identify pass.
+var exifTagsVersion = computeTagsVersion()
+
+func computeTagsVersion() string {
+	sorted := slices.Clone(exifToolArgs)
 	slices.Sort(sorted)
-	sum := sha256.Sum256([]byte(strings.Join(sorted, ",")))
-	return hex.EncodeToString(sum[:])[:12]
+	h := sha256.New()
+	for _, a := range sorted {
+		h.Write([]byte(a))
+		h.Write([]byte{0})
+	}
+	h.Write([]byte(binaryPlaceholder.String()))
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
 // EXIF identifies candidates by MIME type (not extension) so renamed or
 // extensionless files are still picked up. Requires the mime enricher to
 // have run first. The extracted tags are stored as a JSON object in the
-// `data` column.
+// `data` column, keyed by exiftool's "Group:Tag" name.
 type EXIF struct{}
 
 func (EXIF) Name() string      { return "exif" }
@@ -86,9 +102,9 @@ func (EXIF) Indexes() []db.Index { return nil }
 func (EXIF) ProcessBatch() int { return 100 }
 
 func (e EXIF) Identify(ctx context.Context, database *sql.DB) (int, error) {
-	// Reset rows whose tag set differs from the current version so they get
-	// re-processed. Also covers rows created before tags_version existed —
-	// after the ALTER TABLE migration they have tags_version IS NULL.
+	// Reset rows whose extraction policy differs from the current version so
+	// they get re-processed. Also covers rows created before tags_version
+	// existed — after the ALTER TABLE migration they have tags_version IS NULL.
 	if _, err := database.ExecContext(ctx, `
 		UPDATE exif SET processed_at = NULL
 		WHERE processed_at IS NOT NULL
@@ -99,9 +115,9 @@ func (e EXIF) Identify(ctx context.Context, database *sql.DB) (int, error) {
 	return IdentifyByMimeType(ctx, database, e.TableName(), EXIFMimeTypes)
 }
 
-// exiftoolResult keeps unknown tags out by using RawMessage per-tag, so
-// `omitempty` can drop fields exiftool didn't emit rather than storing them
-// as JSON null.
+// exiftoolResult keeps unknown tags out of the top-level struct by using
+// RawMessage per-tag, so SourceFile/Error remain typed while arbitrary tags
+// pass through uninterpreted.
 type exiftoolResult struct {
 	SourceFile string                     `json:"SourceFile"`
 	Error      string                     `json:"Error,omitempty"`
@@ -164,7 +180,7 @@ func (e EXIF) Process(ctx context.Context, items []worker.WorkItem) []worker.Wor
 
 // parseExiftoolBatch decodes exiftool's top-level JSON array and flattens each
 // per-file object into exiftoolResult.Tags while preserving SourceFile and
-// Error at the struct level.
+// Error at the struct level. Binary placeholders and null values are dropped.
 func parseExiftoolBatch(out []byte) ([]exiftoolResult, error) {
 	var raws []map[string]json.RawMessage
 	if err := json.Unmarshal(out, &raws); err != nil {
@@ -180,6 +196,9 @@ func parseExiftoolBatch(out []byte) ([]exiftoolResult, error) {
 			case "Error":
 				_ = json.Unmarshal(v, &r.Error)
 			default:
+				if isEmptyOrBinary(v) {
+					continue
+				}
 				r.Tags[k] = v
 			}
 		}
@@ -188,40 +207,54 @@ func parseExiftoolBatch(out []byte) ([]exiftoolResult, error) {
 	return results, nil
 }
 
-// encodeTags returns a JSON object containing only the requested EXIF tags
-// that were present in the exiftool output. Returns "{}" when no tags matched
-// so `data IS NULL` remains an unambiguous signal of per-row failure.
+// isEmptyOrBinary reports whether a raw JSON value should be dropped from the
+// stored tag map: empty/null, or a string matching exiftool's binary-data
+// placeholder.
+func isEmptyOrBinary(v json.RawMessage) bool {
+	if len(v) == 0 || bytes.Equal(v, []byte("null")) {
+		return true
+	}
+	if v[0] != '"' {
+		return false
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err != nil {
+		return false
+	}
+	return binaryPlaceholder.MatchString(s)
+}
+
+// encodeTags marshals the tag map to a JSON object. Keys are sorted for
+// deterministic output so identical inputs produce byte-identical data
+// (helpful for diffing and cache keys). Returns "{}" when tags is empty so
+// `data IS NULL` remains an unambiguous signal of per-row failure.
 func encodeTags(tags map[string]json.RawMessage) string {
+	if len(tags) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
 	var buf bytes.Buffer
 	buf.WriteByte('{')
-	first := true
-	for _, k := range exifTags {
-		v, ok := tags[k]
-		if !ok || len(v) == 0 || bytes.Equal(v, []byte("null")) {
-			continue
-		}
-		if !first {
+	for i, k := range keys {
+		if i > 0 {
 			buf.WriteByte(',')
 		}
-		first = false
-		keyJSON, _ := json.Marshal(k)
-		buf.Write(keyJSON)
+		kJSON, _ := json.Marshal(k)
+		buf.Write(kJSON)
 		buf.WriteByte(':')
-		buf.Write(v)
+		buf.Write(tags[k])
 	}
 	buf.WriteByte('}')
 	return buf.String()
 }
 
-// runExiftool uses -fast2 to skip the MakerNotes section — big speedup on
-// RAW files, and we only need top-level tags. -s keeps tag names short
-// ("CreateDate" not "EXIF:CreateDate") so they match the requested keys.
 func runExiftool(ctx context.Context, items []worker.WorkItem) ([]byte, error) {
-	args := make([]string, 0, len(items)+len(exifTags)+4)
-	args = append(args, "-json", "-s", "-fast2")
-	for _, tag := range exifTags {
-		args = append(args, "-"+tag)
-	}
+	args := make([]string, 0, len(exifToolArgs)+len(items)+1)
+	args = append(args, exifToolArgs...)
 	args = append(args, "--")
 	for _, item := range items {
 		args = append(args, item.Path)
