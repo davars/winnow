@@ -3,6 +3,7 @@ package enricher
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -91,7 +92,7 @@ func TestSetupSchemaCreatesBaseTableAndColumns(t *testing.T) {
 	}
 
 	// Declared columns.
-	for _, col := range []string{"create_date", "make", "model"} {
+	for _, col := range []string{"data"} {
 		if !columnExists(t, database, "exif", col) {
 			t.Errorf("declared column %q missing", col)
 		}
@@ -161,42 +162,53 @@ func TestProcessExtractsExifFields(t *testing.T) {
 
 	// The JPEG has EXIF data embedded (see exifJPEGHex generation).
 	row := database.QueryRow(`
-		SELECT e.create_date, e.make, e.model, e.processed_at
+		SELECT e.data, e.processed_at
 		FROM exif e JOIN files f ON f.sha256 = e.hash
 		WHERE f.path = 'photo.jpg'
 	`)
-	var createDate, make, model sql.NullString
-	var processedAt sql.NullString
-	if err := row.Scan(&createDate, &make, &model, &processedAt); err != nil {
+	var data, processedAt sql.NullString
+	if err := row.Scan(&data, &processedAt); err != nil {
 		t.Fatal(err)
 	}
 	if !processedAt.Valid {
 		t.Error("processed_at should be set")
 	}
-	if !make.Valid || make.String != "TestMake" {
-		t.Errorf("make = %+v, want TestMake", make)
+	if !data.Valid {
+		t.Fatal("data should be set for JPEG with EXIF")
 	}
-	if !model.Valid || model.String != "TestModel" {
-		t.Errorf("model = %+v, want TestModel", model)
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(data.String), &parsed); err != nil {
+		t.Fatalf("data is not valid JSON: %v (raw: %q)", err, data.String)
 	}
-	if !createDate.Valid || createDate.String != "2024:01:15 12:30:45" {
-		t.Errorf("create_date = %+v, want 2024:01:15 12:30:45", createDate)
+	if parsed["CreateDate"] != "2024:01:15 12:30:45" {
+		t.Errorf("CreateDate = %v, want 2024:01:15 12:30:45", parsed["CreateDate"])
 	}
 
-	// The PNG has no EXIF; processed_at still set, fields NULL.
+	// The PNG has no timestamp EXIF tags but exiftool still reports
+	// Compression, so data should be set but contain only Compression.
 	row = database.QueryRow(`
-		SELECT e.create_date, e.make, e.model, e.processed_at
+		SELECT e.data, e.processed_at
 		FROM exif e JOIN files f ON f.sha256 = e.hash
 		WHERE f.path = 'plain.png'
 	`)
-	if err := row.Scan(&createDate, &make, &model, &processedAt); err != nil {
+	if err := row.Scan(&data, &processedAt); err != nil {
 		t.Fatal(err)
 	}
 	if !processedAt.Valid {
 		t.Error("processed_at should be set for PNG")
 	}
-	if make.Valid || model.Valid || createDate.Valid {
-		t.Errorf("plain png should have NULL EXIF fields, got %+v %+v %+v", make, model, createDate)
+	if !data.Valid {
+		t.Fatal("PNG data should be set (Compression is always reported)")
+	}
+	parsed = nil
+	if err := json.Unmarshal([]byte(data.String), &parsed); err != nil {
+		t.Fatalf("PNG data is not valid JSON: %v (raw: %q)", err, data.String)
+	}
+	if _, hasDate := parsed["CreateDate"]; hasDate {
+		t.Errorf("PNG should not have CreateDate, got %v", parsed["CreateDate"])
+	}
+	if parsed["Compression"] == nil {
+		t.Errorf("PNG should have Compression, got data: %q", data.String)
 	}
 }
 
@@ -219,6 +231,112 @@ func TestProcessIdempotent(t *testing.T) {
 	}
 }
 
+func TestIdentifyResetsStaleTagsVersion(t *testing.T) {
+	database, cfg := testSetup(t)
+
+	writeFile(t, cfg.RawDir, "photo.jpg", mustHex(t, exifJPEGHex))
+	walkHashMime(t, database, cfg)
+
+	if _, _, err := Run(context.Background(), database, EXIF{}, cfg.Stores(), worker.Opts{Workers: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	var firstProcessed, firstVersion sql.NullString
+	if err := database.QueryRow(
+		`SELECT processed_at, tags_version FROM exif`).Scan(&firstProcessed, &firstVersion); err != nil {
+		t.Fatal(err)
+	}
+	if !firstProcessed.Valid || !firstVersion.Valid {
+		t.Fatalf("expected processed_at and tags_version set, got %v %v", firstProcessed, firstVersion)
+	}
+
+	// Simulate a prior run with a different tag set.
+	if _, err := database.Exec(`UPDATE exif SET tags_version = 'stale'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RunIdentify(context.Background(), database, EXIF{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var processedAfterReset sql.NullString
+	if err := database.QueryRow(`SELECT processed_at FROM exif`).Scan(&processedAfterReset); err != nil {
+		t.Fatal(err)
+	}
+	if processedAfterReset.Valid {
+		t.Errorf("processed_at should be NULL after stale version reset, got %q", processedAfterReset.String)
+	}
+
+	if _, err := RunProcess(context.Background(), database, EXIF{}, cfg.Stores(), worker.Opts{Workers: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	var finalVersion sql.NullString
+	if err := database.QueryRow(`SELECT tags_version FROM exif`).Scan(&finalVersion); err != nil {
+		t.Fatal(err)
+	}
+	if finalVersion.String != firstVersion.String {
+		t.Errorf("tags_version = %q, want %q", finalVersion.String, firstVersion.String)
+	}
+}
+
+func TestIdentifyResetsNullTagsVersion(t *testing.T) {
+	database, cfg := testSetup(t)
+
+	writeFile(t, cfg.RawDir, "photo.jpg", mustHex(t, exifJPEGHex))
+	walkHashMime(t, database, cfg)
+
+	if _, _, err := Run(context.Background(), database, EXIF{}, cfg.Stores(), worker.Opts{Workers: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate pre-versioning rows: processed_at set, tags_version NULL.
+	if _, err := database.Exec(`UPDATE exif SET tags_version = NULL`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RunIdentify(context.Background(), database, EXIF{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var processedAt sql.NullString
+	if err := database.QueryRow(`SELECT processed_at FROM exif`).Scan(&processedAt); err != nil {
+		t.Fatal(err)
+	}
+	if processedAt.Valid {
+		t.Errorf("processed_at should be NULL after pre-versioning row reset, got %q", processedAt.String)
+	}
+}
+
+func TestIdentifySkipsCurrentVersion(t *testing.T) {
+	database, cfg := testSetup(t)
+
+	writeFile(t, cfg.RawDir, "photo.jpg", mustHex(t, exifJPEGHex))
+	walkHashMime(t, database, cfg)
+
+	if _, _, err := Run(context.Background(), database, EXIF{}, cfg.Stores(), worker.Opts{Workers: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	var beforeProcessed sql.NullString
+	if err := database.QueryRow(`SELECT processed_at FROM exif`).Scan(&beforeProcessed); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RunIdentify(context.Background(), database, EXIF{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var afterProcessed sql.NullString
+	if err := database.QueryRow(`SELECT processed_at FROM exif`).Scan(&afterProcessed); err != nil {
+		t.Fatal(err)
+	}
+	if afterProcessed.String != beforeProcessed.String {
+		t.Errorf("processed_at changed on same-version re-identify: before=%q after=%q",
+			beforeProcessed.String, afterProcessed.String)
+	}
+}
+
 func TestWriteBatchRejectsUnknownColumn(t *testing.T) {
 	database, _ := testSetup(t)
 	if err := SetupSchema(database, EXIF{}); err != nil {
@@ -228,7 +346,7 @@ func TestWriteBatchRejectsUnknownColumn(t *testing.T) {
 	src := &source{
 		name:    "exif",
 		table:   "exif",
-		columns: []string{"create_date", "make", "model"},
+		columns: []string{"data"},
 		stores:  map[string]string{},
 	}
 
@@ -236,7 +354,7 @@ func TestWriteBatchRejectsUnknownColumn(t *testing.T) {
 		{
 			Item: worker.WorkItem{Hash: "abc", FileID: 1},
 			Values: map[string]any{
-				"make":      "x",
+				"data":      "{}",
 				"bogus_col": "nope",
 			},
 		},

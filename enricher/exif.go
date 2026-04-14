@@ -1,19 +1,25 @@
 package enricher
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/davars/winnow/db"
 	"github.com/davars/winnow/worker"
 )
 
-// ImageMimeTypes enumerates the formats exiftool can reliably read metadata
-// from. Extending this list is the intended way to cover new RAW formats.
-var ImageMimeTypes = []string{
+// EXIFMimeTypes enumerates the formats exiftool can reliably read metadata
+// from, covering both still images and videos. Extending this list is the
+// intended way to cover new formats.
+var EXIFMimeTypes = []string{
+	// Still images
 	"image/jpeg",
 	"image/heic",
 	"image/heif",
@@ -25,11 +31,44 @@ var ImageMimeTypes = []string{
 	"image/x-nikon-nef",
 	"image/x-sony-arw",
 	"image/x-adobe-dng",
+
+	// Video
+	"video/mp4",
+	"video/quicktime",
+	"video/x-msvideo",
+	"video/x-matroska",
+	"video/webm",
+	"video/x-m4v",
+	"video/mpeg",
+	"video/3gpp",
+}
+
+// exifTags lists the tag names requested from exiftool and stored in the
+// `data` JSON blob. Order here controls the JSON key order in the output.
+var exifTags = []string{
+	"CreateDate",
+	"DateTimeOriginal",
+	"SubSecDateTimeOriginal",
+	"SubSecCreateDate",
+	"Compression",
+}
+
+// exifTagsVersion is a short hash of the sorted tag list. Stored alongside
+// each processed row so changing exifTags (add, remove, rename) triggers
+// re-processing on the next Identify run.
+var exifTagsVersion = computeTagsVersion(exifTags)
+
+func computeTagsVersion(tags []string) string {
+	sorted := slices.Clone(tags)
+	slices.Sort(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, ",")))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // EXIF identifies candidates by MIME type (not extension) so renamed or
 // extensionless files are still picked up. Requires the mime enricher to
-// have run first.
+// have run first. The extracted tags are stored as a JSON object in the
+// `data` column.
 type EXIF struct{}
 
 func (EXIF) Name() string      { return "exif" }
@@ -37,9 +76,8 @@ func (EXIF) TableName() string { return "exif" }
 
 func (EXIF) Columns() []db.Column {
 	return []db.Column{
-		{Name: "create_date", Type: "TEXT"},
-		{Name: "make", Type: "TEXT"},
-		{Name: "model", Type: "TEXT"},
+		{Name: "data", Type: "TEXT"},
+		{Name: "tags_version", Type: "TEXT"},
 	}
 }
 
@@ -48,17 +86,26 @@ func (EXIF) Indexes() []db.Index { return nil }
 func (EXIF) ProcessBatch() int { return 100 }
 
 func (e EXIF) Identify(ctx context.Context, database *sql.DB) (int, error) {
-	return IdentifyByMimeType(ctx, database, e.TableName(), ImageMimeTypes)
+	// Reset rows whose tag set differs from the current version so they get
+	// re-processed. Also covers rows created before tags_version existed —
+	// after the ALTER TABLE migration they have tags_version IS NULL.
+	if _, err := database.ExecContext(ctx, `
+		UPDATE exif SET processed_at = NULL
+		WHERE processed_at IS NOT NULL
+		  AND (tags_version IS NULL OR tags_version != ?)
+	`, exifTagsVersion); err != nil {
+		return 0, fmt.Errorf("resetting stale tag versions: %w", err)
+	}
+	return IdentifyByMimeType(ctx, database, e.TableName(), EXIFMimeTypes)
 }
 
-// exiftoolResult tolerates type drift in exiftool's output: some camera models
-// cause Make/Model to be emitted as JSON numbers rather than strings.
+// exiftoolResult keeps unknown tags out by using RawMessage per-tag, so
+// `omitempty` can drop fields exiftool didn't emit rather than storing them
+// as JSON null.
 type exiftoolResult struct {
-	SourceFile string          `json:"SourceFile"`
-	CreateDate json.RawMessage `json:"CreateDate,omitempty"`
-	Make       json.RawMessage `json:"Make,omitempty"`
-	Model      json.RawMessage `json:"Model,omitempty"`
-	Error      string          `json:"Error,omitempty"`
+	SourceFile string                     `json:"SourceFile"`
+	Error      string                     `json:"Error,omitempty"`
+	Tags       map[string]json.RawMessage `json:"-"`
 }
 
 func (e EXIF) Process(ctx context.Context, items []worker.WorkItem) []worker.WorkResult {
@@ -74,8 +121,8 @@ func (e EXIF) Process(ctx context.Context, items []worker.WorkItem) []worker.Wor
 		return results
 	}
 
-	var parsed []exiftoolResult
-	if err := json.Unmarshal(out, &parsed); err != nil {
+	parsed, err := parseExiftoolBatch(out)
+	if err != nil {
 		wrap := fmt.Errorf("parsing exiftool output: %w", err)
 		for i, item := range items {
 			results[i] = worker.WorkResult{Item: item, Err: wrap}
@@ -107,44 +154,77 @@ func (e EXIF) Process(ctx context.Context, items []worker.WorkItem) []worker.Wor
 		results[i] = worker.WorkResult{
 			Item: item,
 			Values: map[string]any{
-				"create_date": decodeExifString(r.CreateDate),
-				"make":        decodeExifString(r.Make),
-				"model":       decodeExifString(r.Model),
+				"data":         encodeTags(r.Tags),
+				"tags_version": exifTagsVersion,
 			},
 		}
 	}
 	return results
 }
 
+// parseExiftoolBatch decodes exiftool's top-level JSON array and flattens each
+// per-file object into exiftoolResult.Tags while preserving SourceFile and
+// Error at the struct level.
+func parseExiftoolBatch(out []byte) ([]exiftoolResult, error) {
+	var raws []map[string]json.RawMessage
+	if err := json.Unmarshal(out, &raws); err != nil {
+		return nil, err
+	}
+	results := make([]exiftoolResult, len(raws))
+	for i, raw := range raws {
+		r := exiftoolResult{Tags: make(map[string]json.RawMessage, len(raw))}
+		for k, v := range raw {
+			switch k {
+			case "SourceFile":
+				_ = json.Unmarshal(v, &r.SourceFile)
+			case "Error":
+				_ = json.Unmarshal(v, &r.Error)
+			default:
+				r.Tags[k] = v
+			}
+		}
+		results[i] = r
+	}
+	return results, nil
+}
+
+// encodeTags returns a JSON object containing only the requested EXIF tags
+// that were present in the exiftool output. Returns "{}" when no tags matched
+// so `data IS NULL` remains an unambiguous signal of per-row failure.
+func encodeTags(tags map[string]json.RawMessage) string {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	first := true
+	for _, k := range exifTags {
+		v, ok := tags[k]
+		if !ok || len(v) == 0 || bytes.Equal(v, []byte("null")) {
+			continue
+		}
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+		keyJSON, _ := json.Marshal(k)
+		buf.Write(keyJSON)
+		buf.WriteByte(':')
+		buf.Write(v)
+	}
+	buf.WriteByte('}')
+	return buf.String()
+}
+
 // runExiftool uses -fast2 to skip the MakerNotes section — big speedup on
 // RAW files, and we only need top-level tags. -s keeps tag names short
-// ("CreateDate" not "EXIF:CreateDate") so they match the struct tags.
+// ("CreateDate" not "EXIF:CreateDate") so they match the requested keys.
 func runExiftool(ctx context.Context, items []worker.WorkItem) ([]byte, error) {
-	args := make([]string, 0, len(items)+7)
-	args = append(args, "-json", "-s", "-fast2",
-		"-CreateDate", "-Make", "-Model", "--")
+	args := make([]string, 0, len(items)+len(exifTags)+4)
+	args = append(args, "-json", "-s", "-fast2")
+	for _, tag := range exifTags {
+		args = append(args, "-"+tag)
+	}
+	args = append(args, "--")
 	for _, item := range items {
 		args = append(args, item.Path)
 	}
 	return runTool(ctx, "exiftool", args...)
-}
-
-// decodeExifString handles exiftool's occasional numeric emission of Make/Model
-// by trying string first, then json.Number, then falling back to the raw bytes.
-func decodeExifString(raw json.RawMessage) any {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		if s == "" {
-			return nil
-		}
-		return s
-	}
-	var n json.Number
-	if err := json.Unmarshal(raw, &n); err == nil {
-		return n.String()
-	}
-	return strings.TrimSpace(string(raw))
 }
