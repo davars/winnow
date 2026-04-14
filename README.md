@@ -209,6 +209,22 @@ Runs an ad-hoc SQL query against the winnow database and prints the result. If n
 winnow query "SELECT path, human_ibytes(total_size) FROM directories ORDER BY total_size DESC LIMIT 30"
 ```
 
+### Exec
+
+```
+winnow exec COMMAND [args...]
+```
+
+Runs a command inheriting winnow's `PATH`. When installed via the Nix flake, this means `exiftool`, `file`, and `ffmpeg` are available without installing them separately on the host — useful for ad-hoc inspection on a server where only `winnow` is on `PATH`.
+
+```
+winnow exec exiftool -json photo.jpg
+winnow exec file --mime-type somefile
+winnow exec ffmpeg -i input.mp4 output.avi
+```
+
+Flag parsing is disabled for `exec`, so flags after the command name are forwarded verbatim to the wrapped binary. The child's stdin/stdout/stderr are connected to the terminal; its exit code is propagated.
+
 ### Config
 
 Config is located via search order: `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
@@ -229,4 +245,4 @@ pre_process_hook = "/usr/local/bin/winnow-snapshot.sh"
 
 ## Status
 
-Early development. The `init`, `status`, `walk`, `reconcile`, `sha256`, `mime`, `exif`, `query`, `plan`, and `process` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) powers sha256, mime, and all enrichers. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes; mime detection populates `mime_type` via libmagic; the EXIF enricher extracts camera metadata from images via `exiftool`. Two organization rules are implemented: `junk` (trashes OS metadata and filesystem debris) and `dedup` (trashes duplicate files in the raw store, keeping the shortest-path copy). Both can be previewed with `winnow plan` or applied with `winnow process`. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). See `PLAN.md` for the full design and phased implementation plan.
+Early development. The `init`, `status`, `walk`, `reconcile`, `sha256`, `mime`, `exif`, `query`, `plan`, `process`, and `exec` commands are implemented. The database is created with core tables, and schema management is in place for enrichers to declare additional columns and indexes. A generic batch-processing worker pool (`worker` package) powers sha256, mime, and all enrichers. Walking populates the `files` and `directories` tables from the filesystem; reconcile marks stale files as missing; sha256 computes content hashes; mime detection populates `mime_type` via libmagic; the EXIF enricher extracts camera metadata from images via `exiftool`. Two organization rules are implemented: `junk` (trashes OS metadata and filesystem debris) and `dedup` (trashes duplicate files in the raw store, keeping the shortest-path copy). Both can be previewed with `winnow plan` or applied with `winnow process`. The Nix flake packages the binary with its runtime dependencies (`exiftool`, `file`, `ffmpeg`). See `PLAN.md` for the full design and phased implementation plan.
