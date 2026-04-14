@@ -8,8 +8,9 @@ var cfgFile string
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "winnow",
-		Short: "File organization tool for cleaning up old backups",
+		Use:           "winnow",
+		Short:         "File organization tool for cleaning up old backups",
+		SilenceErrors: true,
 	}
 
 	root.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path")
