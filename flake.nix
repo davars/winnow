@@ -24,7 +24,7 @@
             pname = "winnow-unwrapped";
             version = "0.0.1";
             src = ./.;
-            vendorHash = "sha256-ocOcgTyD0R1aRmldwd61VmESZOOZoAdYQ2NYRrmIRw0=";
+            vendorHash = "sha256-k1E+KSevbdtGOzGZ9KrrNUtOHaBEtr3BfPb7pJyYoS8=";
             subPackages = [ "." ];
             meta = {
               description = "Incremental file organization tool";
