@@ -235,6 +235,58 @@ max_staleness = "24h"
 	}
 }
 
+func TestLocation(t *testing.T) {
+	// Valid IANA name.
+	cfg := Config{Organize: OrganizeConfig{Timezone: "America/New_York"}}
+	loc, err := cfg.Location()
+	if err != nil {
+		t.Fatalf("Location() for valid tz: %v", err)
+	}
+	if loc.String() != "America/New_York" {
+		t.Errorf("Location().String() = %q, want America/New_York", loc.String())
+	}
+
+	// Empty — must error with a helpful message.
+	cfg = Config{}
+	if _, err := cfg.Location(); err == nil {
+		t.Error("Location() for empty tz: expected error")
+	}
+
+	// Un-loadable.
+	cfg = Config{Organize: OrganizeConfig{Timezone: "Bogus/Place"}}
+	if _, err := cfg.Location(); err == nil {
+		t.Error("Location() for bogus tz: expected error")
+	}
+}
+
+func TestLoadConfigWithOrganize(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "winnow.toml")
+	content := `
+raw_dir   = "/tmp/raw"
+clean_dir = "/tmp/clean"
+trash_dir = "/tmp/trash"
+data_dir  = "/tmp/data"
+
+[organize]
+timezone = "America/Los_Angeles"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Organize.Timezone != "America/Los_Angeles" {
+		t.Errorf("Organize.Timezone = %q, want America/Los_Angeles", cfg.Organize.Timezone)
+	}
+	if _, err := cfg.Location(); err != nil {
+		t.Errorf("Location(): %v", err)
+	}
+}
+
 func TestFindNothingFound(t *testing.T) {
 	t.Setenv("WINNOW_CONFIG", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

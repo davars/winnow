@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/davars/winnow/config"
 	"github.com/spf13/cobra"
 )
@@ -55,31 +54,25 @@ func runInit(force bool) error {
 	if err != nil {
 		return err
 	}
+	tz, err := pickTimezone(reader, os.Stdout)
+	if err != nil {
+		return err
+	}
 
 	cfg := config.Config{
 		RawDir:   rawDir,
 		CleanDir: cleanDir,
 		TrashDir: trashDir,
 		DataDir:  dataDir,
+		Organize: config.OrganizeConfig{Timezone: tz},
 	}
 
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-
-	f, err := os.Create(dest)
-	if err != nil {
-		return fmt.Errorf("creating config file: %w", err)
-	}
-	defer f.Close()
-
-	enc := toml.NewEncoder(f)
-	if err := enc.Encode(cfg); err != nil {
-		return fmt.Errorf("writing config: %w", err)
+	if err := config.Save(dest, &cfg); err != nil {
+		return err
 	}
 
 	fmt.Printf("Config written to %s\n", dest)

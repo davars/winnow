@@ -17,6 +17,14 @@ type ReconcileConfig struct {
 	MaxStaleness string `toml:"max_staleness"`
 }
 
+// OrganizeConfig holds organize-specific configuration.
+type OrganizeConfig struct {
+	// Timezone is the IANA name used to interpret naive EXIF timestamps when no
+	// matching offset tag is present. Required by `winnow organize`; other
+	// subcommands ignore it.
+	Timezone string `toml:"timezone"`
+}
+
 // Config holds the application configuration.
 type Config struct {
 	RawDir   string `toml:"raw_dir"`
@@ -27,6 +35,7 @@ type Config struct {
 	PreProcessHook string `toml:"pre_process_hook,omitempty"`
 
 	Reconcile ReconcileConfig `toml:"reconcile"`
+	Organize  OrganizeConfig  `toml:"organize"`
 }
 
 // Validate checks that all required fields are set.
@@ -61,6 +70,15 @@ func (c *Config) MaxStalenessDuration() (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
+// Location returns the IANA time zone specified by organize.timezone. Required
+// by `winnow organize` to interpret naive EXIF timestamps deterministically.
+func (c *Config) Location() (*time.Location, error) {
+	if c.Organize.Timezone == "" {
+		return nil, fmt.Errorf("organize.timezone not set")
+	}
+	return time.LoadLocation(c.Organize.Timezone)
+}
+
 // Stores returns a map of store name to directory path.
 func (c *Config) Stores() map[string]string {
 	return map[string]string{
@@ -80,6 +98,24 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// Save writes cfg to path as TOML, creating parent directories as needed.
+// Existing files at path are truncated. Used by `winnow init` and by
+// subcommands that prompt the user for previously-missing fields.
+func Save(path string, cfg *Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("creating config file: %w", err)
+	}
+	defer f.Close()
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	return nil
 }
 
 // xdgConfigPath returns the XDG-based config path, or "" if it cannot be determined.
