@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"bufio"
-	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,7 +39,7 @@ func TestMatchZonesMultiToken(t *testing.T) {
 
 	// Just "new" should hit New_York and the New_Salem entry both (they contain "new").
 	got = matchZones("new", zones)
-	if !contains(got, "America/New_York") || !contains(got, "America/North_Dakota/New_Salem") {
+	if !slices.Contains(got, "America/New_York") || !slices.Contains(got, "America/North_Dakota/New_Salem") {
 		t.Errorf("matchZones(\"new\") = %v, missing New_York or New_Salem", got)
 	}
 }
@@ -116,7 +114,7 @@ func TestLoadZonesFromRootsFixture(t *testing.T) {
 
 	want := []string{"America/New_York", "Europe/Berlin", "UTC"}
 	for _, w := range want {
-		if !contains(got, w) {
+		if !slices.Contains(got, w) {
 			t.Errorf("loadZonesFromRoots missing %q (got %v)", w, got)
 		}
 	}
@@ -138,97 +136,6 @@ func TestLoadZonesFromRootsMissing(t *testing.T) {
 	if len(got) != 0 {
 		t.Errorf("got %v, want empty slice", got)
 	}
-}
-
-func TestPickTimezoneAcceptsDefault(t *testing.T) {
-	out := &bytes.Buffer{}
-	reader := bufio.NewReader(strings.NewReader("\n"))
-	// Default is "America/Los_Angeles" here via the prompt string; detectSystemTZ
-	// isn't deterministic across hosts, so we can't assert the default. Instead
-	// we verify an empty response produces a valid accepted zone.
-	got, err := pickTimezone(reader, out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The default must be a loadable IANA name (detectSystemTZ returns one, or
-	// we fall back to "UTC").
-	if got == "" || got == "Local" {
-		t.Errorf("got empty or Local: %q", got)
-	}
-}
-
-func TestPickTimezoneExactMatch(t *testing.T) {
-	out := &bytes.Buffer{}
-	reader := bufio.NewReader(strings.NewReader("America/New_York\n"))
-	got, err := pickTimezone(reader, out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "America/New_York" {
-		t.Errorf("got %q, want America/New_York", got)
-	}
-}
-
-func TestPickTimezoneSingleFuzzyMatch(t *testing.T) {
-	out := &bytes.Buffer{}
-	// "honolulu" matches exactly one zone on all platforms: Pacific/Honolulu.
-	reader := bufio.NewReader(strings.NewReader("honolulu\n"))
-	got, err := pickTimezone(reader, out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "Pacific/Honolulu" {
-		t.Errorf("got %q, want Pacific/Honolulu", got)
-	}
-}
-
-func TestPickTimezoneNumberedChoice(t *testing.T) {
-	out := &bytes.Buffer{}
-	// "berlin" should match Europe/Berlin (likely 1 match). Use "europe" to
-	// force a numbered list, then pick Europe/Berlin by number.
-	// Europe/ has more than 10 zones, so instead use "dakota" which yields
-	// the two North_Dakota zones on most systems.
-	reader := bufio.NewReader(strings.NewReader("dakota\n1\n"))
-	got, err := pickTimezone(reader, out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(got, "America/North_Dakota/") {
-		t.Skipf("host zoneinfo lacks North_Dakota zones; got %q", got)
-	}
-}
-
-func TestPickTimezoneNoMatchRetries(t *testing.T) {
-	out := &bytes.Buffer{}
-	reader := bufio.NewReader(strings.NewReader("xyz123\nAmerica/New_York\n"))
-	got, err := pickTimezone(reader, out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "America/New_York" {
-		t.Errorf("got %q, want America/New_York", got)
-	}
-	if !strings.Contains(out.String(), "No matches") {
-		t.Errorf("expected 'No matches' message, got:\n%s", out.String())
-	}
-}
-
-func TestPickTimezoneRejectsLocal(t *testing.T) {
-	out := &bytes.Buffer{}
-	// "Local" loads OK via time.LoadLocation but we reject it. After rejection,
-	// the user supplies America/New_York and we accept it.
-	reader := bufio.NewReader(strings.NewReader("Local\nAmerica/New_York\n"))
-	got, err := pickTimezone(reader, out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "America/New_York" {
-		t.Errorf("got %q, want America/New_York", got)
-	}
-}
-
-func contains(xs []string, v string) bool {
-	return slices.Contains(xs, v)
 }
 
 func mustMkdir(t *testing.T, p string) {

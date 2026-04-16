@@ -1,12 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"time"
 
-	"github.com/davars/winnow/config"
 	"github.com/davars/winnow/organize"
 	"github.com/spf13/cobra"
 )
@@ -38,8 +35,8 @@ func runOrganize(cmd *cobra.Command, removeOriginals, dryRun bool) error {
 	}
 	defer database.Close()
 
-	if err := ensureOrganizeTimezone(cfg); err != nil {
-		return err
+	if _, err := cfg.Location(); err != nil {
+		return fmt.Errorf("%w — run `winnow init` to configure it", err)
 	}
 
 	stats, err := organize.Run(cmd.Context(), database, cfg, organize.Opts{
@@ -52,28 +49,4 @@ func runOrganize(cmd *cobra.Command, removeOriginals, dryRun bool) error {
 		stats.Duration.Round(100*time.Millisecond))
 
 	return err
-}
-
-// ensureOrganizeTimezone interactively fills in organize.timezone when it's
-// missing and writes the updated config back to disk, so the prompt only
-// fires once per installation.
-func ensureOrganizeTimezone(cfg *config.Config) error {
-	if cfg.Organize.Timezone != "" {
-		return nil
-	}
-	path, err := config.Find(cfgFile)
-	if err != nil {
-		return err
-	}
-	fmt.Println("organize.timezone is not set.")
-	tz, err := pickTimezone(bufio.NewReader(os.Stdin), os.Stdout)
-	if err != nil {
-		return fmt.Errorf("prompting for timezone: %w", err)
-	}
-	cfg.Organize.Timezone = tz
-	if err := config.Save(path, cfg); err != nil {
-		return fmt.Errorf("saving timezone to %s: %w", path, err)
-	}
-	fmt.Printf("Saved organize.timezone = %q to %s\n", tz, path)
-	return nil
 }

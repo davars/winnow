@@ -287,6 +287,34 @@ timezone = "America/Los_Angeles"
 	}
 }
 
+func TestLoadPermissive_ToleratesMissingFields(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "winnow.toml")
+	content := `
+clean_dir = "/tmp/clean"
+data_dir  = "/tmp/data"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadPermissive(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadPermissive should not error on missing fields, got: %v", err)
+	}
+	if cfg.RawDir != "" {
+		t.Errorf("RawDir = %q, want empty", cfg.RawDir)
+	}
+	if cfg.CleanDir != "/tmp/clean" {
+		t.Errorf("CleanDir = %q, want /tmp/clean", cfg.CleanDir)
+	}
+
+	// Strict Load should fail on the same file
+	if _, err := Load(cfgPath); err == nil {
+		t.Error("strict Load should fail on missing required fields")
+	}
+}
+
 func TestFindNothingFound(t *testing.T) {
 	t.Setenv("WINNOW_CONFIG", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

@@ -90,12 +90,22 @@ func (c *Config) Stores() map[string]string {
 
 // Load reads and parses a config file from the given path.
 func Load(path string) (*Config, error) {
-	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return nil, fmt.Errorf("loading config from %s: %w", path, err)
+	cfg, err := LoadPermissive(path)
+	if err != nil {
+		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// LoadPermissive reads and parses a config file without running Validate.
+// Used by init to load a potentially incomplete config for interactive repair.
+func LoadPermissive(path string) (*Config, error) {
+	var cfg Config
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return nil, fmt.Errorf("loading config from %s: %w", path, err)
 	}
 	return &cfg, nil
 }

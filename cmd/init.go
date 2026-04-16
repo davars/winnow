@@ -1,77 +1,109 @@
 package cmd
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	huh "charm.land/huh/v2"
 	"github.com/davars/winnow/config"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 func newInitCmd() *cobra.Command {
-	var force bool
-
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Interactive setup: prompts for paths, writes config",
+		Short: "Interactive setup: configure all settings",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(force)
+			return runInit()
 		},
 	}
-
-	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing config file")
-
 	return cmd
 }
 
-func runInit(force bool) error {
-	dest := config.DefaultConfigPath()
+func runInit() error {
+	dest, current, err := resolveInitTarget(cfgFile)
+	if err != nil {
+		return err
+	}
 
-	if !force {
-		if _, err := os.Stat(dest); err == nil {
-			return fmt.Errorf("config file already exists at %s (use --force to overwrite)", dest)
+	zones, _ := loadZoneList()
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			dirInput("Raw directory", &current.RawDir),
+			dirInput("Clean directory", &current.CleanDir),
+			dirInput("Trash directory", &current.TrashDir),
+			dirInput("Data directory", &current.DataDir),
+		).Title("Directories"),
+		huh.NewGroup(
+			tzInput(&current.Organize.Timezone, zones),
+		).Title("Timezone"),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Pre-process hook").
+				Description(`Command run before processing (enter "-" to clear)`).
+				Value(&current.PreProcessHook),
+			huh.NewInput().
+				Title("Reconcile max staleness").
+				Description("Duration before marking unseen files as missing").
+				Value(&current.Reconcile.MaxStaleness).
+				Validate(func(s string) error {
+					if s == "" {
+						return nil
+					}
+					_, err := time.ParseDuration(s)
+					return err
+				}),
+		).Title("Options"),
+	)
+
+	accessible := !isatty.IsTerminal(os.Stdin.Fd())
+	// Huh's accessible mode creates a new bufio.Scanner per field.
+	// Each scanner reads ahead, consuming input meant for later fields.
+	// A one-byte-at-a-time reader prevents this. Shared across the form
+	// and post-form confirm prompts so they read from the same stream.
+	var safeReader io.Reader
+	if accessible {
+		safeReader = &oneByteReader{os.Stdin}
+		form = form.WithAccessible(true).WithInput(safeReader)
+	}
+
+	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return fmt.Errorf("init cancelled")
+		}
+		return err
+	}
+
+	if current.PreProcessHook == "-" {
+		current.PreProcessHook = ""
+	}
+
+	dirs := []*string{&current.RawDir, &current.CleanDir, &current.TrashDir, &current.DataDir}
+	for _, d := range dirs {
+		*d, err = expandAndResolve(*d)
+		if err != nil {
+			return err
 		}
 	}
 
-	reader := bufio.NewReader(os.Stdin)
+	for _, d := range dirs {
+		if err := ensureDir(*d, accessible, safeReader); err != nil {
+			return err
+		}
+	}
 
-	rawDir, err := promptPath(reader, "Raw directory (unsorted files)", "")
-	if err != nil {
-		return err
-	}
-	cleanDir, err := promptPath(reader, "Clean directory (organized files)", "")
-	if err != nil {
-		return err
-	}
-	trashDir, err := promptPath(reader, "Trash directory (files staged for deletion)", "")
-	if err != nil {
-		return err
-	}
-	dataDir, err := promptPath(reader, "Data directory (winnow database)", "")
-	if err != nil {
-		return err
-	}
-	tz, err := pickTimezone(reader, os.Stdout)
-	if err != nil {
+	if err := current.Validate(); err != nil {
 		return err
 	}
 
-	cfg := config.Config{
-		RawDir:   rawDir,
-		CleanDir: cleanDir,
-		TrashDir: trashDir,
-		DataDir:  dataDir,
-		Organize: config.OrganizeConfig{Timezone: tz},
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-
-	if err := config.Save(dest, &cfg); err != nil {
+	if err := config.Save(dest, current); err != nil {
 		return err
 	}
 
@@ -79,58 +111,132 @@ func runInit(force bool) error {
 	return nil
 }
 
-func promptPath(reader *bufio.Reader, label, defaultVal string) (string, error) {
-	for {
-		if defaultVal != "" {
-			fmt.Printf("%s [%s]: ", label, defaultVal)
+func resolveInitTarget(cfgFlag string) (string, *config.Config, error) {
+	path, err := config.Find(cfgFlag)
+	if err != nil {
+		cfg := &config.Config{
+			Reconcile: config.ReconcileConfig{MaxStaleness: config.DefaultMaxStaleness},
+		}
+		if tz := detectSystemTZ(); tz != "" {
+			cfg.Organize.Timezone = tz
 		} else {
-			fmt.Printf("%s: ", label)
+			cfg.Organize.Timezone = "UTC"
 		}
+		return config.DefaultConfigPath(), cfg, nil
+	}
 
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return "", err
-		}
-		line = strings.TrimSpace(line)
+	cfg, err := config.LoadPermissive(path)
+	if err != nil {
+		return "", nil, err
+	}
+	fmt.Printf("Editing config at %s\n", path)
+	return path, cfg, nil
+}
 
-		if line == "" && defaultVal != "" {
-			line = defaultVal
-		}
-		if line == "" {
-			fmt.Println("  Path is required.")
+func dirInput(title string, value *string) *huh.Input {
+	return huh.NewInput().
+		Title(title).
+		Value(value).
+		SuggestionsFunc(func() []string {
+			return dirSuggestions(*value)
+		}, value)
+}
+
+func tzInput(value *string, zones []string) *huh.Input {
+	return huh.NewInput().
+		Title("Timezone").
+		Description("IANA timezone for interpreting EXIF timestamps").
+		Value(value).
+		SuggestionsFunc(func() []string {
+			matches := matchZones(*value, zones)
+			if len(matches) > 10 {
+				matches = matches[:10]
+			}
+			return matches
+		}, value).
+		Validate(func(s string) error {
+			if s == "" {
+				return nil
+			}
+			if s == "Local" {
+				return fmt.Errorf("explicit IANA timezone required (not %q)", s)
+			}
+			_, err := time.LoadLocation(s)
+			return err
+		})
+}
+
+func dirSuggestions(partial string) []string {
+	if partial == "" {
+		return nil
+	}
+	expanded := expandTilde(partial)
+	matches, _ := filepath.Glob(expanded + "*")
+	var dirs []string
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil || !info.IsDir() {
 			continue
 		}
-
-		// Expand ~ to home directory.
-		if strings.HasPrefix(line, "~/") {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", fmt.Errorf("expanding ~: %w", err)
-			}
-			line = filepath.Join(home, line[2:])
-		}
-
-		abs, err := filepath.Abs(line)
-		if err != nil {
-			return "", fmt.Errorf("resolving path: %w", err)
-		}
-
-		if _, err := os.Stat(abs); os.IsNotExist(err) {
-			fmt.Printf("  %s does not exist. Create it? [Y/n]: ", abs)
-			ans, err := reader.ReadString('\n')
-			if err != nil {
-				return "", err
-			}
-			ans = strings.TrimSpace(strings.ToLower(ans))
-			if ans == "" || ans == "y" || ans == "yes" {
-				if err := os.MkdirAll(abs, 0o755); err != nil {
-					return "", fmt.Errorf("creating directory: %w", err)
-				}
-			} else {
-				continue
+		display := m
+		if strings.HasPrefix(partial, "~/") {
+			if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(m, home) {
+				display = "~/" + strings.TrimPrefix(m, home+string(filepath.Separator))
 			}
 		}
-
-		return abs, nil
+		dirs = append(dirs, display+string(filepath.Separator))
 	}
+	return dirs
+}
+
+func expandTilde(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+func expandAndResolve(path string) (string, error) {
+	path = expandTilde(path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving path %q: %w", path, err)
+	}
+	return abs, nil
+}
+
+type oneByteReader struct{ r io.Reader }
+
+func (o *oneByteReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return o.r.Read(p[:1])
+}
+
+func ensureDir(path string, accessible bool, r io.Reader) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	var create bool
+	confirm := huh.NewConfirm().
+		Title(fmt.Sprintf("%s does not exist. Create it?", path)).
+		Value(&create).
+		Affirmative("Yes").
+		Negative("No")
+	if accessible {
+		if err := confirm.RunAccessible(os.Stdout, r); err != nil {
+			return err
+		}
+	} else {
+		if err := confirm.Run(); err != nil {
+			return err
+		}
+	}
+	if !create {
+		return fmt.Errorf("directory %s does not exist", path)
+	}
+	return os.MkdirAll(path, 0o755)
 }

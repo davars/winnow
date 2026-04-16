@@ -68,7 +68,9 @@ Each step is incremental and resumable; rerunning picks up where the last run st
 winnow init
 ```
 
-Interactive setup that prompts for the four directories and writes `$XDG_CONFIG_HOME/winnow/winnow.toml`.
+Interactive setup that prompts for directories, timezone, pre-process hook, and reconcile staleness. If a config file already exists, each prompt is pre-filled with the current value — press Enter to keep it unchanged. Path prompts offer directory autocompletion; the timezone prompt fuzzy-matches against the host's IANA zones. Enter `-` at the pre-process hook prompt to clear it.
+
+Writes to `$XDG_CONFIG_HOME/winnow/winnow.toml` (or the existing config's location when editing).
 
 ### status
 
@@ -164,6 +166,8 @@ winnow exec exiftool -json photo.jpg
 
 Located in this order: `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
 
+All fields can be set or edited interactively via `winnow init`.
+
 ```toml
 raw_dir   = "/mnt/backup/raw"
 clean_dir = "/mnt/backup/clean"
@@ -172,6 +176,9 @@ data_dir  = "/mnt/backup/.winnow"
 
 [reconcile]
 max_staleness = "48h"
+
+[organize]
+timezone = "America/Los_Angeles"
 
 # Optional: run before any ops in `winnow process`. Non-zero exit aborts.
 pre_process_hook = "/usr/local/bin/winnow-snapshot.sh"

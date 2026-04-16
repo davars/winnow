@@ -1,16 +1,11 @@
 package cmd
 
 import (
-	"bufio"
-	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 	"unicode"
 )
 
@@ -19,104 +14,6 @@ import (
 var zoneinfoRoots = []string{
 	"/usr/share/zoneinfo",
 	"/var/db/timezone/zoneinfo",
-}
-
-// pickTimezone interactively prompts the user for an IANA time zone, offering
-// fuzzy matching against the host's zoneinfo database. The returned value is
-// guaranteed to load via time.LoadLocation and is never "Local" or "".
-func pickTimezone(reader *bufio.Reader, out io.Writer) (string, error) {
-	defaultTZ := detectSystemTZ()
-	if defaultTZ == "" {
-		defaultTZ = "UTC"
-	}
-
-	zones, _ := loadZoneList()
-
-	for {
-		if defaultTZ != "" {
-			fmt.Fprintf(out, "Timezone [%s]: ", defaultTZ)
-		} else {
-			fmt.Fprint(out, "Timezone: ")
-		}
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return "", err
-		}
-		query := strings.TrimSpace(line)
-
-		if query == "" {
-			if accepted, ok := acceptZone(defaultTZ, out); ok {
-				return accepted, nil
-			}
-			continue
-		}
-
-		// If the user typed an exact, valid IANA name, take it.
-		if _, err := time.LoadLocation(query); err == nil && query != "Local" {
-			return query, nil
-		}
-
-		matches := matchZones(query, zones)
-		switch {
-		case len(matches) == 0:
-			fmt.Fprintln(out, `No matches. Try a region (e.g. "europe") or exact IANA name.`)
-			continue
-		case len(matches) == 1:
-			fmt.Fprintf(out, "Using: %s\n", matches[0])
-			if accepted, ok := acceptZone(matches[0], out); ok {
-				return accepted, nil
-			}
-			continue
-		case len(matches) <= 10:
-			choice, ok := pickNumbered(reader, out, matches)
-			if !ok {
-				continue
-			}
-			if accepted, ok := acceptZone(choice, out); ok {
-				return accepted, nil
-			}
-		default:
-			for i := range 10 {
-				fmt.Fprintf(out, "  %d) %s\n", i+1, matches[i])
-			}
-			fmt.Fprintf(out, "  … and %d more, be more specific\n", len(matches)-10)
-		}
-	}
-}
-
-// acceptZone validates zone via time.LoadLocation and refuses "Local" / "".
-// On failure, prints a note and returns ok=false so the caller re-prompts.
-func acceptZone(zone string, out io.Writer) (string, bool) {
-	if zone == "" || zone == "Local" {
-		fmt.Fprintln(out, `Rejected: choose an explicit IANA zone (not "Local").`)
-		return "", false
-	}
-	if _, err := time.LoadLocation(zone); err != nil {
-		fmt.Fprintf(out, "Rejected: %v\n", err)
-		return "", false
-	}
-	return zone, true
-}
-
-// pickNumbered prints matches and reads a 1-based selection or a new query.
-// Returns (zone, true) when the user picked a valid index; (_, false) when
-// they typed anything else (treated as a re-query and handled on the next
-// iteration of the outer loop).
-func pickNumbered(reader *bufio.Reader, out io.Writer, matches []string) (string, bool) {
-	for i, z := range matches {
-		fmt.Fprintf(out, "  %d) %s\n", i+1, z)
-	}
-	fmt.Fprint(out, "Select number or re-query: ")
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", false
-	}
-	line = strings.TrimSpace(line)
-	n, err := strconv.Atoi(line)
-	if err != nil || n < 1 || n > len(matches) {
-		return "", false
-	}
-	return matches[n-1], true
 }
 
 // detectSystemTZ reads /etc/localtime and extracts the zone name from the path
