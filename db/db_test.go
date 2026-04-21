@@ -52,7 +52,7 @@ func TestCoreTables(t *testing.T) {
 	}
 	defer database.Close()
 
-	tables := []string{"files", "directories", "operations", "process_errors"}
+	tables := []string{"files", "directories", "operations", "process_errors", "settings"}
 	for _, table := range tables {
 		t.Run(table, func(t *testing.T) {
 			var name string
@@ -88,6 +88,7 @@ func TestCoreTableColumns(t *testing.T) {
 		{"directories", []string{"id", "store", "path", "file_count", "total_size"}},
 		{"operations", []string{"id", "file_id", "dir_id", "src_store", "src_path", "dst_store", "dst_path", "rule", "reason", "executed_at"}},
 		{"process_errors", []string{"id", "file_id", "dir_id", "enricher", "rule", "error", "occurred_at"}},
+		{"settings", []string{"id", "raw_dir", "clean_dir", "trash_dir", "pre_process_hook", "reconcile_max_staleness", "organize_timezone"}},
 	}
 
 	for _, tt := range tests {

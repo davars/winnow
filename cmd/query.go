@@ -57,7 +57,7 @@ functions registered by winnow (e.g. human_size) are available.`,
 }
 
 func runQuery(query, format string, header bool) error {
-	_, database, err := openDB()
+	_, database, err := openBootstrapDB()
 	if err != nil {
 		return err
 	}

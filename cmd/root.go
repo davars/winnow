@@ -5,6 +5,7 @@ import (
 )
 
 var cfgFile string
+var dataDir string
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
@@ -14,8 +15,10 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	root.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file path")
+	root.PersistentFlags().StringVar(&dataDir, "data-dir", "", "data directory (overrides config lookup)")
 
 	root.AddCommand(newInitCmd())
+	root.AddCommand(newImportConfigCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newWalkCmd())
 	root.AddCommand(newReconcileCmd())

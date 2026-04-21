@@ -1,123 +1,229 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/BurntSushi/toml"
 	"github.com/davars/winnow/config"
+	"github.com/davars/winnow/db"
 )
 
-func TestResolveInitTarget_CreateMode(t *testing.T) {
+func TestResolveInitTargetCreateMode(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("WINNOW_CONFIG", "")
 
-	dest, cfg, err := resolveInitTarget("")
+	dest, bootstrap, editing, err := resolveInitTarget("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	if editing {
+		t.Fatal("editing should be false for create mode")
+	}
 	if dest == "" {
 		t.Fatal("dest is empty")
 	}
-	if cfg.Reconcile.MaxStaleness != config.DefaultMaxStaleness {
-		t.Errorf("MaxStaleness = %q, want %q", cfg.Reconcile.MaxStaleness, config.DefaultMaxStaleness)
-	}
-	if cfg.Organize.Timezone == "" {
-		t.Error("Timezone should be set to system default or UTC")
+	if bootstrap.DataDir != "" {
+		t.Errorf("DataDir = %q, want empty", bootstrap.DataDir)
 	}
 }
 
-func TestResolveInitTarget_EditMode(t *testing.T) {
+func TestResolveInitTargetEditMode(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "winnow.toml")
 
-	cfg := config.Config{
-		RawDir:   "/tmp/raw",
-		CleanDir: "/tmp/clean",
-		TrashDir: "/tmp/trash",
-		DataDir:  "/tmp/data",
-		Organize: config.OrganizeConfig{Timezone: "Europe/Berlin"},
-	}
-	if err := config.Save(cfgPath, &cfg); err != nil {
+	if err := config.Save(cfgPath, &config.Bootstrap{DataDir: "/tmp/data"}); err != nil {
 		t.Fatal(err)
 	}
 
 	t.Setenv("WINNOW_CONFIG", cfgPath)
 
-	dest, loaded, err := resolveInitTarget("")
+	dest, bootstrap, editing, err := resolveInitTarget("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	if !editing {
+		t.Fatal("editing should be true")
+	}
 	if dest != cfgPath {
 		t.Errorf("dest = %q, want %q", dest, cfgPath)
 	}
-	if loaded.RawDir != "/tmp/raw" {
-		t.Errorf("RawDir = %q, want /tmp/raw", loaded.RawDir)
-	}
-	if loaded.Organize.Timezone != "Europe/Berlin" {
-		t.Errorf("Timezone = %q, want Europe/Berlin", loaded.Organize.Timezone)
+	if bootstrap.DataDir != "/tmp/data" {
+		t.Errorf("DataDir = %q, want /tmp/data", bootstrap.DataDir)
 	}
 }
 
-func TestResolveInitTarget_PermissiveLoad(t *testing.T) {
+func TestResolveInitTargetExplicitFlagWins(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "winnow.toml")
+	cfgPath := filepath.Join(dir, "custom.toml")
 
-	// Write a config missing raw_dir (which would fail strict Load)
-	f, err := os.Create(cfgPath)
+	dest, bootstrap, editing, err := resolveInitTarget("/tmp/override", cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := toml.NewEncoder(f).Encode(config.Config{
-		CleanDir: "/tmp/clean",
-		TrashDir: "/tmp/trash",
-		DataDir:  "/tmp/data",
-	}); err != nil {
-		f.Close()
-		t.Fatal(err)
-	}
-	f.Close()
-
-	t.Setenv("WINNOW_CONFIG", cfgPath)
-
-	_, loaded, err := resolveInitTarget("")
-	if err != nil {
-		t.Fatalf("resolveInitTarget should tolerate invalid config, got: %v", err)
-	}
-	if loaded.RawDir != "" {
-		t.Errorf("RawDir = %q, want empty", loaded.RawDir)
-	}
-	if loaded.CleanDir != "/tmp/clean" {
-		t.Errorf("CleanDir = %q, want /tmp/clean", loaded.CleanDir)
-	}
-}
-
-func TestResolveInitTarget_ExplicitFlag(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "winnow.toml")
-
-	if err := config.Save(cfgPath, &config.Config{
-		RawDir:   "/a",
-		CleanDir: "/b",
-		TrashDir: "/c",
-		DataDir:  "/d",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Even with XDG pointing elsewhere, explicit flag wins
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("WINNOW_CONFIG", "")
-
-	dest, _, err := resolveInitTarget(cfgPath)
-	if err != nil {
-		t.Fatal(err)
+	if editing {
+		t.Fatal("editing should be false for a new explicit path")
 	}
 	if dest != cfgPath {
 		t.Errorf("dest = %q, want %q", dest, cfgPath)
+	}
+	if bootstrap.DataDir != "/tmp/override" {
+		t.Errorf("DataDir = %q, want /tmp/override", bootstrap.DataDir)
+	}
+}
+
+func TestRunInitWithIOWritesBootstrapAndDBSettings(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "winnow.toml")
+	dataDirPath := filepath.Join(tmp, "data")
+	rawDir := filepath.Join(tmp, "raw")
+	cleanDir := filepath.Join(tmp, "clean")
+	trashDir := filepath.Join(tmp, "trash")
+
+	for _, dir := range []string{dataDirPath, rawDir, cleanDir, trashDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prevCfgFile, prevDataDir := cfgFile, dataDir
+	cfgFile, dataDir = cfgPath, ""
+	t.Cleanup(func() {
+		cfgFile, dataDir = prevCfgFile, prevDataDir
+	})
+
+	input := strings.Join([]string{
+		dataDirPath,
+		rawDir,
+		cleanDir,
+		trashDir,
+		"America/New_York",
+		"/usr/local/bin/hook.sh",
+		"24h",
+		"",
+	}, "\n")
+	var out bytes.Buffer
+	if err := runInitWithIO(strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	bootstrap, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bootstrap.DataDir != dataDirPath {
+		t.Errorf("DataDir = %q, want %q", bootstrap.DataDir, dataDirPath)
+	}
+
+	database, err := db.Open(bootstrap.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	settings, err := db.LoadSettings(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.RawDir != rawDir {
+		t.Errorf("RawDir = %q, want %q", settings.RawDir, rawDir)
+	}
+	if settings.CleanDir != cleanDir {
+		t.Errorf("CleanDir = %q, want %q", settings.CleanDir, cleanDir)
+	}
+	if settings.TrashDir != trashDir {
+		t.Errorf("TrashDir = %q, want %q", settings.TrashDir, trashDir)
+	}
+	if settings.PreProcessHook != "/usr/local/bin/hook.sh" {
+		t.Errorf("PreProcessHook = %q, want /usr/local/bin/hook.sh", settings.PreProcessHook)
+	}
+	if settings.Reconcile.MaxStaleness != "24h" {
+		t.Errorf("MaxStaleness = %q, want 24h", settings.Reconcile.MaxStaleness)
+	}
+	if settings.Organize.Timezone != "America/New_York" {
+		t.Errorf("Timezone = %q, want America/New_York", settings.Organize.Timezone)
+	}
+}
+
+func TestRunInitWithIOCreatesMissingDirectories(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "winnow.toml")
+	dataDirPath := filepath.Join(tmp, "data")
+	rawDir := filepath.Join(tmp, "raw")
+	cleanDir := filepath.Join(tmp, "clean")
+	trashDir := filepath.Join(tmp, "trash")
+
+	prevCfgFile, prevDataDir := cfgFile, dataDir
+	cfgFile, dataDir = cfgPath, ""
+	t.Cleanup(func() {
+		cfgFile, dataDir = prevCfgFile, prevDataDir
+	})
+
+	input := strings.Join([]string{
+		dataDirPath,
+		"y",
+		rawDir,
+		cleanDir,
+		trashDir,
+		"",
+		"",
+		"",
+		"y",
+		"y",
+		"y",
+		"",
+	}, "\n")
+	var out bytes.Buffer
+	if err := runInitWithIO(strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dir := range []string{dataDirPath, rawDir, cleanDir, trashDir} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("expected %s to exist as a directory", dir)
+		}
+	}
+}
+
+func TestRunInitWithIORejectsInvalidDuration(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "winnow.toml")
+	dataDirPath := filepath.Join(tmp, "data")
+	rawDir := filepath.Join(tmp, "raw")
+	cleanDir := filepath.Join(tmp, "clean")
+	trashDir := filepath.Join(tmp, "trash")
+
+	for _, dir := range []string{dataDirPath, rawDir, cleanDir, trashDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prevCfgFile, prevDataDir := cfgFile, dataDir
+	cfgFile, dataDir = cfgPath, ""
+	t.Cleanup(func() {
+		cfgFile, dataDir = prevCfgFile, prevDataDir
+	})
+
+	input := strings.Join([]string{
+		dataDirPath,
+		rawDir,
+		cleanDir,
+		trashDir,
+		"",
+		"",
+		"bogus",
+		"24h",
+		"",
+	}, "\n")
+	var out bytes.Buffer
+	if err := runInitWithIO(strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `Invalid duration "bogus".`) {
+		t.Fatalf("output = %q, want invalid duration message", out.String())
 	}
 }
 
@@ -155,32 +261,5 @@ func TestExpandAndResolve(t *testing.T) {
 	want := filepath.Join(home, "foo")
 	if got != want {
 		t.Errorf("expandAndResolve(\"~/foo\") = %q, want %q", got, want)
-	}
-}
-
-func TestDirSuggestions(t *testing.T) {
-	root := t.TempDir()
-	mustMkdir(t, filepath.Join(root, "alpha"))
-	mustMkdir(t, filepath.Join(root, "alpha-two"))
-	mustWrite(t, filepath.Join(root, "alpha-file"), "not a dir")
-
-	got := dirSuggestions(filepath.Join(root, "alph"))
-	if len(got) != 2 {
-		t.Fatalf("got %v, want 2 dir suggestions", got)
-	}
-	for _, s := range got {
-		if !filepath.IsAbs(s) {
-			t.Errorf("suggestion %q is not absolute", s)
-		}
-		if s[len(s)-1] != filepath.Separator {
-			t.Errorf("suggestion %q should end with separator", s)
-		}
-	}
-}
-
-func TestDirSuggestionsEmpty(t *testing.T) {
-	got := dirSuggestions("")
-	if len(got) != 0 {
-		t.Errorf("got %v, want empty for empty input", got)
 	}
 }

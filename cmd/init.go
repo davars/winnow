@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bufio"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -9,16 +11,15 @@ import (
 	"strings"
 	"time"
 
-	huh "charm.land/huh/v2"
 	"github.com/davars/winnow/config"
-	"github.com/mattn/go-isatty"
+	"github.com/davars/winnow/db"
 	"github.com/spf13/cobra"
 )
 
 func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Interactive setup: configure all settings",
+		Short: "Interactive setup: configure the data dir and database-backed settings",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runInit()
 		},
@@ -27,166 +28,290 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInit() error {
-	dest, current, err := resolveInitTarget(cfgFile)
+	return runInitWithIO(os.Stdin, os.Stdout)
+}
+
+func runInitWithIO(in io.Reader, out io.Writer) error {
+	dest, bootstrap, editingExisting, err := resolveInitTarget(dataDir, cfgFile)
+	if err != nil {
+		return err
+	}
+	if editingExisting {
+		fmt.Fprintf(out, "Editing config at %s\n", dest)
+	}
+
+	prompter := newLinePrompter(in, out)
+
+	dataDirValue, err := prompter.promptRequired("Data directory", bootstrap.DataDir, "")
+	if err != nil {
+		return err
+	}
+	bootstrap.DataDir, err = expandAndResolve(dataDirValue)
+	if err != nil {
+		return err
+	}
+	if err := ensureDir(prompter, bootstrap.DataDir); err != nil {
+		return err
+	}
+
+	database, err := db.Open(bootstrap.DBPath())
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	settings, err := initSettings(database)
 	if err != nil {
 		return err
 	}
 
 	zones, _ := loadZoneList()
 
-	form := huh.NewForm(
-		huh.NewGroup(
-			dirInput("Raw directory", &current.RawDir),
-			dirInput("Clean directory", &current.CleanDir),
-			dirInput("Trash directory", &current.TrashDir),
-			dirInput("Data directory", &current.DataDir),
-		).Title("Directories"),
-		huh.NewGroup(
-			tzInput(&current.Organize.Timezone, zones),
-		).Title("Timezone"),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Pre-process hook").
-				Description(`Command run before processing (enter "-" to clear)`).
-				Value(&current.PreProcessHook),
-			huh.NewInput().
-				Title("Reconcile max staleness").
-				Description("Duration before marking unseen files as missing").
-				Value(&current.Reconcile.MaxStaleness).
-				Validate(func(s string) error {
-					if s == "" {
-						return nil
-					}
-					_, err := time.ParseDuration(s)
-					return err
-				}),
-		).Title("Options"),
-	)
-
-	accessible := !isatty.IsTerminal(os.Stdin.Fd())
-	// Huh's accessible mode creates a new bufio.Scanner per field.
-	// Each scanner reads ahead, consuming input meant for later fields.
-	// A one-byte-at-a-time reader prevents this. Shared across the form
-	// and post-form confirm prompts so they read from the same stream.
-	var safeReader io.Reader
-	if accessible {
-		safeReader = &oneByteReader{os.Stdin}
-		form = form.WithAccessible(true).WithInput(safeReader)
+	settings.RawDir, err = prompter.promptRequired("Raw directory", settings.RawDir, "")
+	if err != nil {
+		return err
 	}
-
-	if err := form.Run(); err != nil {
-		if errors.Is(err, huh.ErrUserAborted) {
-			return fmt.Errorf("init cancelled")
-		}
+	settings.CleanDir, err = prompter.promptRequired("Clean directory", settings.CleanDir, "")
+	if err != nil {
+		return err
+	}
+	settings.TrashDir, err = prompter.promptRequired("Trash directory", settings.TrashDir, "")
+	if err != nil {
+		return err
+	}
+	settings.Organize.Timezone, err = promptTimezone(prompter, settings.Organize.Timezone, zones)
+	if err != nil {
+		return err
+	}
+	settings.PreProcessHook, err = prompter.promptOptional(
+		"Pre-process hook",
+		settings.PreProcessHook,
+		`Command run before processing (enter "-" to clear)`,
+		true,
+	)
+	if err != nil {
+		return err
+	}
+	settings.Reconcile.MaxStaleness, err = promptDuration(
+		prompter,
+		"Reconcile max staleness",
+		settings.Reconcile.MaxStaleness,
+		`Duration before marking unseen files as missing (enter "-" to clear)`,
+	)
+	if err != nil {
 		return err
 	}
 
-	if current.PreProcessHook == "-" {
-		current.PreProcessHook = ""
-	}
-
-	dirs := []*string{&current.RawDir, &current.CleanDir, &current.TrashDir, &current.DataDir}
-	for _, d := range dirs {
-		*d, err = expandAndResolve(*d)
+	dirs := []*string{&settings.RawDir, &settings.CleanDir, &settings.TrashDir}
+	for _, dir := range dirs {
+		*dir, err = expandAndResolve(*dir)
 		if err != nil {
 			return err
 		}
 	}
-
-	for _, d := range dirs {
-		if err := ensureDir(*d, accessible, safeReader); err != nil {
+	for _, dir := range dirs {
+		if err := ensureDir(prompter, *dir); err != nil {
 			return err
 		}
 	}
 
-	if err := current.Validate(); err != nil {
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	if err := db.SaveSettings(database, settings); err != nil {
+		return err
+	}
+	if err := config.Save(dest, bootstrap); err != nil {
 		return err
 	}
 
-	if err := config.Save(dest, current); err != nil {
-		return err
-	}
-
-	fmt.Printf("Config written to %s\n", dest)
+	fmt.Fprintf(out, "Config written to %s\n", dest)
+	fmt.Fprintf(out, "Settings saved in %s\n", bootstrap.DBPath())
 	return nil
 }
 
-func resolveInitTarget(cfgFlag string) (string, *config.Config, error) {
-	path, err := config.Find(cfgFlag)
-	if err != nil {
-		cfg := &config.Config{
-			Reconcile: config.ReconcileConfig{MaxStaleness: config.DefaultMaxStaleness},
+func initSettings(database *sql.DB) (*config.Settings, error) {
+	settings, err := db.LoadSettings(database)
+	if err == nil {
+		return settings, nil
+	}
+	if !errors.Is(err, db.ErrSettingsNotConfigured) {
+		return nil, err
+	}
+
+	settings = config.DefaultSettings()
+	if tz := detectSystemTZ(); tz != "" {
+		settings.Organize.Timezone = tz
+	} else {
+		settings.Organize.Timezone = "UTC"
+	}
+	return settings, nil
+}
+
+func resolveInitTarget(dataDirFlag, cfgFlag string) (string, *config.Bootstrap, bool, error) {
+	current := &config.Bootstrap{}
+	if dataDirFlag != "" {
+		current.DataDir = dataDirFlag
+	}
+
+	if cfgFlag != "" {
+		if _, err := os.Stat(cfgFlag); err == nil {
+			loaded, err := config.Load(cfgFlag)
+			if err != nil {
+				return "", nil, false, err
+			}
+			if current.DataDir == "" {
+				current.DataDir = loaded.DataDir
+			}
+			return cfgFlag, current, true, nil
 		}
-		if tz := detectSystemTZ(); tz != "" {
-			cfg.Organize.Timezone = tz
-		} else {
-			cfg.Organize.Timezone = "UTC"
-		}
-		return config.DefaultConfigPath(), cfg, nil
+		return cfgFlag, current, false, nil
 	}
 
-	cfg, err := config.LoadPermissive(path)
+	path, err := config.Find("")
 	if err != nil {
-		return "", nil, err
+		return config.DefaultConfigPath(), current, false, nil
 	}
-	fmt.Printf("Editing config at %s\n", path)
-	return path, cfg, nil
-}
 
-func dirInput(title string, value *string) *huh.Input {
-	return huh.NewInput().
-		Title(title).
-		Value(value).
-		SuggestionsFunc(func() []string {
-			return dirSuggestions(*value)
-		}, value)
-}
-
-func tzInput(value *string, zones []string) *huh.Input {
-	return huh.NewInput().
-		Title("Timezone").
-		Description("IANA timezone for interpreting EXIF timestamps").
-		Value(value).
-		SuggestionsFunc(func() []string {
-			matches := matchZones(*value, zones)
-			if len(matches) > 10 {
-				matches = matches[:10]
-			}
-			return matches
-		}, value).
-		Validate(func(s string) error {
-			if s == "" {
-				return nil
-			}
-			if s == "Local" {
-				return fmt.Errorf("explicit IANA timezone required (not %q)", s)
-			}
-			_, err := time.LoadLocation(s)
-			return err
-		})
-}
-
-func dirSuggestions(partial string) []string {
-	if partial == "" {
-		return nil
+	loaded, err := config.Load(path)
+	if err != nil {
+		return "", nil, false, err
 	}
-	expanded := expandTilde(partial)
-	matches, _ := filepath.Glob(expanded + "*")
-	var dirs []string
-	for _, m := range matches {
-		info, err := os.Stat(m)
-		if err != nil || !info.IsDir() {
+	if current.DataDir == "" {
+		current.DataDir = loaded.DataDir
+	}
+	return path, current, true, nil
+}
+
+type linePrompter struct {
+	in  *bufio.Reader
+	out io.Writer
+}
+
+func newLinePrompter(in io.Reader, out io.Writer) *linePrompter {
+	return &linePrompter{
+		in:  bufio.NewReader(in),
+		out: out,
+	}
+}
+
+func (p *linePrompter) promptRequired(label, current, description string) (string, error) {
+	for {
+		value, err := p.promptOptional(label, current, description, false)
+		if err != nil {
+			return "", err
+		}
+		if value != "" {
+			return value, nil
+		}
+		fmt.Fprintf(p.out, "%s is required.\n", label)
+	}
+}
+
+func (p *linePrompter) promptOptional(label, current, description string, clearable bool) (string, error) {
+	if description != "" {
+		fmt.Fprintf(p.out, "%s\n", description)
+	}
+	prompt := label + ": "
+	if current != "" {
+		prompt = fmt.Sprintf("%s [%s]: ", label, current)
+	}
+	fmt.Fprint(p.out, prompt)
+
+	line, err := p.readLine()
+	if err != nil {
+		return "", err
+	}
+	if line == "" {
+		return current, nil
+	}
+	if clearable && line == "-" {
+		return "", nil
+	}
+	return line, nil
+}
+
+func (p *linePrompter) confirm(question string) (bool, error) {
+	for {
+		fmt.Fprintf(p.out, "%s [y/N]: ", question)
+		line, err := p.readLine()
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(line) {
+		case "y", "yes":
+			return true, nil
+		case "", "n", "no":
+			return false, nil
+		default:
+			fmt.Fprintln(p.out, `Please answer "y" or "n".`)
+		}
+	}
+}
+
+func (p *linePrompter) readLine() (string, error) {
+	line, err := p.in.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	line = strings.TrimSpace(line)
+	if errors.Is(err, io.EOF) && line == "" {
+		return "", io.EOF
+	}
+	return line, nil
+}
+
+func promptTimezone(prompter *linePrompter, current string, zones []string) (string, error) {
+	for {
+		value, err := prompter.promptOptional(
+			"Timezone",
+			current,
+			"IANA timezone for interpreting EXIF timestamps (enter - to clear)",
+			true,
+		)
+		if err != nil {
+			return "", err
+		}
+		if value == "" {
+			return "", nil
+		}
+		if value == "Local" {
+			fmt.Fprintf(prompter.out, "Explicit IANA timezone required (not %q).\n", value)
 			continue
 		}
-		display := m
-		if strings.HasPrefix(partial, "~/") {
-			if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(m, home) {
-				display = "~/" + strings.TrimPrefix(m, home+string(filepath.Separator))
-			}
+		if _, err := time.LoadLocation(value); err == nil {
+			return value, nil
 		}
-		dirs = append(dirs, display+string(filepath.Separator))
+
+		matches := matchZones(value, zones)
+		if len(matches) > 10 {
+			matches = matches[:10]
+		}
+		if len(matches) == 0 {
+			fmt.Fprintf(prompter.out, "Unknown timezone %q.\n", value)
+			continue
+		}
+		fmt.Fprintf(prompter.out, "Unknown timezone %q. Did you mean:\n", value)
+		for _, match := range matches {
+			fmt.Fprintf(prompter.out, "  %s\n", match)
+		}
 	}
-	return dirs
+}
+
+func promptDuration(prompter *linePrompter, label, current, description string) (string, error) {
+	for {
+		value, err := prompter.promptOptional(label, current, description, true)
+		if err != nil {
+			return "", err
+		}
+		if value == "" {
+			return "", nil
+		}
+		if _, err := time.ParseDuration(value); err == nil {
+			return value, nil
+		}
+		fmt.Fprintf(prompter.out, "Invalid duration %q.\n", value)
+	}
 }
 
 func expandTilde(path string) string {
@@ -207,33 +332,13 @@ func expandAndResolve(path string) (string, error) {
 	return abs, nil
 }
 
-type oneByteReader struct{ r io.Reader }
-
-func (o *oneByteReader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	return o.r.Read(p[:1])
-}
-
-func ensureDir(path string, accessible bool, r io.Reader) error {
+func ensureDir(prompter *linePrompter, path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
-	var create bool
-	confirm := huh.NewConfirm().
-		Title(fmt.Sprintf("%s does not exist. Create it?", path)).
-		Value(&create).
-		Affirmative("Yes").
-		Negative("No")
-	if accessible {
-		if err := confirm.RunAccessible(os.Stdout, r); err != nil {
-			return err
-		}
-	} else {
-		if err := confirm.Run(); err != nil {
-			return err
-		}
+	create, err := prompter.confirm(fmt.Sprintf("%s does not exist. Create it?", path))
+	if err != nil {
+		return err
 	}
 	if !create {
 		return fmt.Errorf("directory %s does not exist", path)

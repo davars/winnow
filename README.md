@@ -8,7 +8,7 @@ Winnow catalogs files in SQLite, enriches the catalog with content hashes and me
 
 - **No deletes.** Files move to a configured trash directory; the only thing removed in place is empty directories (logged).
 - **Dry-run first.** `winnow plan` previews every operation; nothing touches the filesystem until `winnow process`.
-- **Pre-process hook.** Set `pre_process_hook` in the config to take a snapshot (e.g. ZFS) before `process` runs; non-zero exit aborts.
+- **Pre-process hook.** Set `pre_process_hook` in the database-backed settings to take a snapshot (e.g. ZFS) before `process` runs; non-zero exit aborts.
 - **No clobber on move.** Cross-filesystem moves use `O_EXCL`; an existing file at the destination is never overwritten.
 - **Audit log.** Every move is recorded in the `operations` table.
 
@@ -48,7 +48,7 @@ Winnow operates on three file stores plus a data directory:
 Configure once, then run the pipeline:
 
 ```sh
-winnow init                # interactive: prompts for raw/clean/trash/data dirs
+winnow init                # interactive: prompts for data dir, then DB-backed settings
 winnow walk                # discover files on disk
 winnow reconcile           # mark files that have disappeared as missing
 winnow sha256              # content hashes
@@ -60,6 +60,8 @@ winnow process             # execute the plan
 
 Each step is incremental and resumable; rerunning picks up where the last run stopped. `plan` is a pure dry-run and safe to repeat.
 
+The TOML file is now just a locator for `data_dir`; operational settings live in the SQLite `settings` table.
+
 ## Commands
 
 ### init
@@ -68,9 +70,23 @@ Each step is incremental and resumable; rerunning picks up where the last run st
 winnow init
 ```
 
-Interactive setup that prompts for directories, timezone, pre-process hook, and reconcile staleness. If a config file already exists, each prompt is pre-filled with the current value — press Enter to keep it unchanged. Path prompts offer directory autocompletion; the timezone prompt fuzzy-matches against the host's IANA zones. Enter `-` at the pre-process hook prompt to clear it.
+Interactive setup that prompts for the data directory first, then loads or creates `winnow.db` there and edits the DB-backed settings (`raw_dir`, `clean_dir`, `trash_dir`, `organize.timezone`, `pre_process_hook`, `reconcile.max_staleness`). If a locator file or DB settings row already exists, prompts are pre-filled with the current values. Enter `-` to clear optional values like the hook or timezone.
 
-Writes to `$XDG_CONFIG_HOME/winnow/winnow.toml` (or the existing config's location when editing).
+Writes a minimal locator file to `$XDG_CONFIG_HOME/winnow/winnow.toml` (or the existing config's location when editing):
+
+```toml
+data_dir = "/mnt/backup/.winnow"
+```
+
+`--data-dir` overrides config-file lookup for the current run and is also used as the initial default in `winnow init`.
+
+### import-config
+
+```
+winnow import-config [--force]
+```
+
+Temporary migration helper for older full TOML configs. It reads the legacy TOML, imports the runtime settings into the database, then rewrites that TOML in place to the new one-field locator format. If the database already has a settings row, pass `--force` to replace it.
 
 ### status
 
@@ -78,7 +94,9 @@ Writes to `$XDG_CONFIG_HOME/winnow/winnow.toml` (or the existing config's locati
 winnow status [-v]
 ```
 
-Database statistics (file counts, operations, errors). `-v` adds config paths.
+Database statistics (file counts, operations, errors). `-v` adds the locator path plus the DB-backed settings.
+
+`status` works as soon as the database exists. Operational commands such as `walk`, `reconcile`, `sha256`, `mime`, `exif`, `plan`, `process`, and `organize` require the settings row and will tell you to run `winnow init` or `winnow import-config` if it is missing.
 
 ### walk
 
@@ -129,7 +147,7 @@ winnow plan    [rule]
 winnow process [rule]
 ```
 
-`plan` runs every rule in priority order and prints the proposed operations without touching disk. `process` runs the same plan and then executes it (after running `pre_process_hook` if configured). Pass a rule name to scope to that rule alone.
+`plan` runs every rule in priority order and prints the proposed operations without touching disk. `process` runs the same plan and then executes it (after running `pre_process_hook` if configured in the settings row). Pass a rule name to scope to that rule alone.
 
 Files trashed by a rule are moved to the trash store preserving their relative path; the move is recorded in `operations`. Files claimed by an earlier-priority rule are skipped by later ones.
 
@@ -145,6 +163,8 @@ winnow query [SQL] [--format {table,tsv,csv}] [--no-header]
 ```
 
 Ad-hoc SQL against the winnow database; reads SQL from stdin if no argument is passed. Two helpers are registered: `human_bytes(n)` (SI) and `human_ibytes(n)` (IEC), both via `go-humanize`.
+
+`query` only needs the data directory locator; it does not require the settings row to exist yet.
 
 ```
 winnow query "SELECT path, human_ibytes(total_size) FROM directories ORDER BY total_size DESC LIMIT 30"
@@ -164,25 +184,24 @@ winnow exec exiftool -json photo.jpg
 
 ## Config
 
-Located in this order: `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
+Located in this order: `--data-dir`, `-c` flag, `$WINNOW_CONFIG`, `$XDG_CONFIG_HOME/winnow/winnow.toml`, `./winnow.toml`.
 
-All fields can be set or edited interactively via `winnow init`.
+The steady-state TOML is only a locator:
 
 ```toml
-raw_dir   = "/mnt/backup/raw"
-clean_dir = "/mnt/backup/clean"
-trash_dir = "/mnt/backup/trash"
-data_dir  = "/mnt/backup/.winnow"
-
-[reconcile]
-max_staleness = "48h"
-
-[organize]
-timezone = "America/Los_Angeles"
-
-# Optional: run before any ops in `winnow process`. Non-zero exit aborts.
-pre_process_hook = "/usr/local/bin/winnow-snapshot.sh"
+data_dir = "/mnt/backup/.winnow"
 ```
+
+The database `settings` table stores:
+
+- `raw_dir`
+- `clean_dir`
+- `trash_dir`
+- `pre_process_hook`
+- `reconcile_max_staleness`
+- `organize_timezone`
+
+Edit those values with `winnow init`. Migrate old full TOMLs once with `winnow import-config`.
 
 ## Status
 

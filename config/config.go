@@ -25,17 +25,57 @@ type OrganizeConfig struct {
 	Timezone string `toml:"timezone"`
 }
 
-// Config holds the application configuration.
+// Bootstrap is the minimal on-disk locator config. It only needs the data
+// directory so winnow can find the SQLite database.
+type Bootstrap struct {
+	DataDir string `toml:"data_dir"`
+}
+
+// Validate checks that the locator config is usable.
+func (b *Bootstrap) Validate() error {
+	if b.DataDir == "" {
+		return fmt.Errorf("data_dir is required")
+	}
+	return nil
+}
+
+// DBPath returns the path to the SQLite database file.
+func (b *Bootstrap) DBPath() string {
+	return filepath.Join(b.DataDir, "winnow.db")
+}
+
+// Settings holds runtime settings persisted in the database.
+type Settings struct {
+	RawDir   string
+	CleanDir string
+	TrashDir string
+
+	PreProcessHook string
+
+	Reconcile ReconcileConfig
+	Organize  OrganizeConfig
+}
+
+// Config is a convenience wrapper for code that needs both the locator and the
+// runtime settings in one value. Production bootstrap/runtime flow should use
+// Bootstrap and Settings directly.
 type Config struct {
-	RawDir   string `toml:"raw_dir"`
-	CleanDir string `toml:"clean_dir"`
-	TrashDir string `toml:"trash_dir"`
-	DataDir  string `toml:"data_dir"`
+	RawDir   string
+	CleanDir string
+	TrashDir string
+	DataDir  string
 
-	PreProcessHook string `toml:"pre_process_hook,omitempty"`
+	PreProcessHook string
 
-	Reconcile ReconcileConfig `toml:"reconcile"`
-	Organize  OrganizeConfig  `toml:"organize"`
+	Reconcile ReconcileConfig
+	Organize  OrganizeConfig
+}
+
+// DefaultSettings returns runtime defaults for a new install.
+func DefaultSettings() *Settings {
+	return &Settings{
+		Reconcile: ReconcileConfig{MaxStaleness: DefaultMaxStaleness},
+	}
 }
 
 // Validate checks that all required fields are set.
@@ -57,63 +97,159 @@ func (c *Config) Validate() error {
 
 // DBPath returns the path to the SQLite database file.
 func (c *Config) DBPath() string {
-	return filepath.Join(c.DataDir, "winnow.db")
+	return c.BootstrapConfig().DBPath()
 }
 
 // MaxStalenessDuration returns the parsed max_staleness duration,
 // falling back to DefaultMaxStaleness if not configured.
 func (c *Config) MaxStalenessDuration() (time.Duration, error) {
-	s := c.Reconcile.MaxStaleness
-	if s == "" {
-		s = DefaultMaxStaleness
-	}
-	return time.ParseDuration(s)
+	return c.RuntimeSettings().MaxStalenessDuration()
 }
 
-// Location returns the IANA time zone specified by organize.timezone. Required
-// by `winnow organize` to interpret naive EXIF timestamps deterministically.
+// Location returns the configured IANA timezone.
 func (c *Config) Location() (*time.Location, error) {
-	if c.Organize.Timezone == "" {
-		return nil, fmt.Errorf("organize.timezone not set")
-	}
-	return time.LoadLocation(c.Organize.Timezone)
+	return c.RuntimeSettings().Location()
 }
 
 // Stores returns a map of store name to directory path.
 func (c *Config) Stores() map[string]string {
-	return map[string]string{
-		"raw":   c.RawDir,
-		"clean": c.CleanDir,
-		"trash": c.TrashDir,
+	return c.RuntimeSettings().Stores()
+}
+
+// BootstrapConfig returns the locator portion of the combined config.
+func (c *Config) BootstrapConfig() *Bootstrap {
+	return &Bootstrap{DataDir: c.DataDir}
+}
+
+// RuntimeSettings returns the runtime settings portion of the combined config.
+func (c *Config) RuntimeSettings() *Settings {
+	return &Settings{
+		RawDir:         c.RawDir,
+		CleanDir:       c.CleanDir,
+		TrashDir:       c.TrashDir,
+		PreProcessHook: c.PreProcessHook,
+		Reconcile:      c.Reconcile,
+		Organize:       c.Organize,
 	}
 }
 
-// Load reads and parses a config file from the given path.
-func Load(path string) (*Config, error) {
-	cfg, err := LoadPermissive(path)
-	if err != nil {
-		return nil, err
+// Validate checks that all required store paths are set.
+func (s *Settings) Validate() error {
+	if s.RawDir == "" {
+		return fmt.Errorf("raw_dir is required")
+	}
+	if s.CleanDir == "" {
+		return fmt.Errorf("clean_dir is required")
+	}
+	if s.TrashDir == "" {
+		return fmt.Errorf("trash_dir is required")
+	}
+	return nil
+}
+
+// MaxStalenessDuration returns the parsed max_staleness duration,
+// falling back to DefaultMaxStaleness if not configured.
+func (s *Settings) MaxStalenessDuration() (time.Duration, error) {
+	value := s.Reconcile.MaxStaleness
+	if value == "" {
+		value = DefaultMaxStaleness
+	}
+	return time.ParseDuration(value)
+}
+
+// Location returns the IANA time zone specified by organize.timezone. Required
+// by `winnow organize` to interpret naive EXIF timestamps deterministically.
+func (s *Settings) Location() (*time.Location, error) {
+	if s.Organize.Timezone == "" {
+		return nil, fmt.Errorf("organize.timezone not set")
+	}
+	return time.LoadLocation(s.Organize.Timezone)
+}
+
+// Stores returns a map of store name to directory path.
+func (s *Settings) Stores() map[string]string {
+	return map[string]string{
+		"raw":   s.RawDir,
+		"clean": s.CleanDir,
+		"trash": s.TrashDir,
+	}
+}
+
+// LegacyConfig is the previous full TOML config format. It is only used by
+// the temporary import-config migration command.
+type LegacyConfig struct {
+	RawDir   string `toml:"raw_dir"`
+	CleanDir string `toml:"clean_dir"`
+	TrashDir string `toml:"trash_dir"`
+	DataDir  string `toml:"data_dir"`
+
+	PreProcessHook string `toml:"pre_process_hook,omitempty"`
+
+	Reconcile ReconcileConfig `toml:"reconcile"`
+	Organize  OrganizeConfig  `toml:"organize"`
+}
+
+// Validate checks that all required fields are set.
+func (c *LegacyConfig) Validate() error {
+	if c.RawDir == "" {
+		return fmt.Errorf("raw_dir is required")
+	}
+	if c.CleanDir == "" {
+		return fmt.Errorf("clean_dir is required")
+	}
+	if c.TrashDir == "" {
+		return fmt.Errorf("trash_dir is required")
+	}
+	if c.DataDir == "" {
+		return fmt.Errorf("data_dir is required")
+	}
+	return nil
+}
+
+// BootstrapConfig returns the minimal locator portion of the legacy config.
+func (c *LegacyConfig) BootstrapConfig() *Bootstrap {
+	return &Bootstrap{DataDir: c.DataDir}
+}
+
+// RuntimeSettings returns the database-backed settings portion of the legacy config.
+func (c *LegacyConfig) RuntimeSettings() *Settings {
+	return &Settings{
+		RawDir:         c.RawDir,
+		CleanDir:       c.CleanDir,
+		TrashDir:       c.TrashDir,
+		PreProcessHook: c.PreProcessHook,
+		Reconcile:      c.Reconcile,
+		Organize:       c.Organize,
+	}
+}
+
+// Load reads and parses a locator config file from the given path.
+func Load(path string) (*Bootstrap, error) {
+	var cfg Bootstrap
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return nil, fmt.Errorf("loading config from %s: %w", path, err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
-	return cfg, nil
+	return &cfg, nil
 }
 
-// LoadPermissive reads and parses a config file without running Validate.
-// Used by init to load a potentially incomplete config for interactive repair.
-func LoadPermissive(path string) (*Config, error) {
-	var cfg Config
+// LoadLegacy reads and parses a legacy full config file from the given path.
+func LoadLegacy(path string) (*LegacyConfig, error) {
+	var cfg LegacyConfig
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return nil, fmt.Errorf("loading config from %s: %w", path, err)
+		return nil, fmt.Errorf("loading legacy config from %s: %w", path, err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid legacy config %s: %w", path, err)
 	}
 	return &cfg, nil
 }
 
 // Save writes cfg to path as TOML, creating parent directories as needed.
-// Existing files at path are truncated. Used by `winnow init` and by
-// subcommands that prompt the user for previously-missing fields.
-func Save(path string, cfg *Config) error {
+// Existing files at path are truncated.
+func Save(path string, cfg *Bootstrap) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
@@ -163,19 +299,43 @@ func Find(explicit string) (string, error) {
 
 	candidates = append(candidates, "winnow.toml")
 
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			return c, nil
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
 		}
 	}
 
 	return "", fmt.Errorf("no config file found (searched: %v)", candidates)
 }
 
+// Resolve returns the locator config from either the explicit data-dir override
+// or the standard config-file search order. When the data-dir override is used,
+// the returned config path is empty because no locator file was consulted.
+func Resolve(dataDir, explicit string) (*Bootstrap, string, error) {
+	if dataDir != "" {
+		bootstrap := &Bootstrap{DataDir: dataDir}
+		if err := bootstrap.Validate(); err != nil {
+			return nil, "", err
+		}
+		return bootstrap, "", nil
+	}
+
+	path, err := Find(explicit)
+	if err != nil {
+		return nil, "", err
+	}
+
+	bootstrap, err := Load(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return bootstrap, path, nil
+}
+
 // DefaultConfigPath returns the default path for writing a new config file.
 func DefaultConfigPath() string {
-	if p := xdgConfigPath(); p != "" {
-		return p
+	if path := xdgConfigPath(); path != "" {
+		return path
 	}
 	return "winnow.toml"
 }

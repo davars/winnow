@@ -54,6 +54,16 @@ CREATE TABLE IF NOT EXISTS process_errors (
     error       TEXT NOT NULL,
     occurred_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    id                       INTEGER PRIMARY KEY CHECK (id = 1),
+    raw_dir                  TEXT NOT NULL,
+    clean_dir                TEXT NOT NULL,
+    trash_dir                TEXT NOT NULL,
+    pre_process_hook         TEXT NOT NULL DEFAULT '',
+    reconcile_max_staleness  TEXT NOT NULL DEFAULT '',
+    organize_timezone        TEXT NOT NULL DEFAULT ''
+);
 `
 
 // filesProvider declares every extension column and index on the files table.

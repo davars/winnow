@@ -1,9 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
-	"github.com/davars/winnow/config"
 	"github.com/davars/winnow/db"
 	"github.com/spf13/cobra"
 )
@@ -25,7 +25,7 @@ func newStatusCmd() *cobra.Command {
 }
 
 func runStatus(verbose bool) error {
-	cfg, database, err := openDB()
+	state, database, err := openBootstrapDB()
 	if err != nil {
 		return err
 	}
@@ -36,7 +36,7 @@ func runStatus(verbose bool) error {
 		return err
 	}
 
-	fmt.Printf("Database: %s\n", cfg.DBPath())
+	fmt.Printf("Database: %s\n", state.Bootstrap.DBPath())
 	fmt.Printf("Files:       %d\n", stats.Files)
 	fmt.Printf("Directories: %d\n", stats.Directories)
 	fmt.Printf("Missing:     %d\n", stats.Missing)
@@ -44,12 +44,28 @@ func runStatus(verbose bool) error {
 	fmt.Printf("Errors:      %d\n", stats.Errors)
 
 	if verbose {
-		cfgPath, _ := config.Find(cfgFile)
-		fmt.Printf("\nConfig: %s\n", cfgPath)
-		fmt.Printf("  raw_dir:   %s\n", cfg.RawDir)
-		fmt.Printf("  clean_dir: %s\n", cfg.CleanDir)
-		fmt.Printf("  trash_dir: %s\n", cfg.TrashDir)
-		fmt.Printf("  data_dir:  %s\n", cfg.DataDir)
+		configPath := state.ConfigPath
+		if configPath == "" {
+			configPath = "(via --data-dir)"
+		}
+		fmt.Printf("\nConfig: %s\n", configPath)
+		fmt.Printf("  data_dir:  %s\n", state.Bootstrap.DataDir)
+
+		settings, err := db.LoadSettings(database)
+		if err != nil {
+			if errors.Is(err, db.ErrSettingsNotConfigured) {
+				fmt.Printf("  settings:  not configured\n")
+				return nil
+			}
+			return err
+		}
+
+		fmt.Printf("  raw_dir:   %s\n", settings.RawDir)
+		fmt.Printf("  clean_dir: %s\n", settings.CleanDir)
+		fmt.Printf("  trash_dir: %s\n", settings.TrashDir)
+		fmt.Printf("  hook:      %s\n", settings.PreProcessHook)
+		fmt.Printf("  staleness: %s\n", settings.Reconcile.MaxStaleness)
+		fmt.Printf("  timezone:  %s\n", settings.Organize.Timezone)
 	}
 
 	return nil
